@@ -1,0 +1,28 @@
+{
+  "name": "cc-notify-mod",
+  "version": "0.1.0",
+  "description": "Forward Claude Code task completion, repeated Bash failures, and AskUserQuestion prompts to the macOS Notification Center so you hear about them when you are away from the terminal.",
+  "author": {
+    "name": "lixinghui"
+  },
+  "userConfig": {
+    "enabled": {
+      "title": "Enable system notifications",
+      "type": "boolean",
+      "default": true,
+      "description": "Master switch. When false, no system notifications are sent and the band shows the mod as muted."
+    },
+    "suppressWhenFocused": {
+      "title": "Suppress when the terminal is the frontmost app",
+      "type": "boolean",
+      "default": true,
+      "description": "Skip notifications when Claude Code is the focused app (no point interrupting yourself). Set to false to notify regardless of focus."
+    },
+    "stickyOnError": {
+      "title": "Sticky notifications on error",
+      "type": "boolean",
+      "default": false,
+      "description": "Forwarded warning notifications stay on screen until dismissed. Only takes effect when terminal-notifier is installed (see README); otherwise macOS auto-dismisses."
+    }
+  }
+}

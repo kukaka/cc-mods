@@ -16,6 +16,11 @@
       "name": "cc-code-format-mod",
       "source": "./cc-code-format-mod",
       "description": "Rewrites every fenced code block in an LLM response to the language's standard style (Prettier for the web stack, black for Python, gofmt / rustfmt / shfmt where installed)."
+    },
+    {
+      "name": "cc-notify-mod",
+      "source": "./cc-notify-mod",
+      "description": "Forwards Claude Code task completion, repeated Bash failures, and AskUserQuestion prompts to the macOS Notification Center, with a one-line focus/status indicator above the prompt."
     }
   ]
 }

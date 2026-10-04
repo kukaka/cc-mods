@@ -6,6 +6,8 @@ Personal Claude Code mods, packaged as a [local marketplace](https://code.claude
 cc-mods/
 ├── .claude-plugin/marketplace.json     ← declares the marketplace + lists the mods
 ├── cc-context-mod/                     ← mod: live context weather + MiniMax M Plan balance
+├── cc-code-format-mod/                 ← mod: rewrites every code block to standard style
+├── cc-notify-mod/                      ← mod: macOS Notification Center for task completion
 └── (future mods drop here)
 ```
 
@@ -15,6 +17,7 @@ cc-mods/
 | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [`cc-context-mod`](./cc-context-mod)         | One-line dashboard above the prompt: context window weather (left) + MiniMax M Plan / Token Plan balance (right).                                                      |
 | [`cc-code-format-mod`](./cc-code-format-mod) | Reformats every fenced code block in an LLM response to the language's standard style (Prettier, black, gofmt, rustfmt, shfmt) before the row lands in the transcript. |
+| [`cc-notify-mod`](./cc-notify-mod)           | Forwards `turn.complete` / repeated `Bash` failures / `AskUserQuestion` prompts to the macOS Notification Center when you are away from the terminal.                  |
 
 ## Install
 
