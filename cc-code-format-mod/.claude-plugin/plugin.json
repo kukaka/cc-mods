@@ -1,0 +1,17 @@
+{
+  "name": "cc-code-format-mod",
+  "version": "0.1.0",
+  "description": "Rewrites every fenced code block in an LLM response so it conforms to the language's standard style (Prettier for the web stack, black for Python, gofmt / rustfmt / shfmt where installed).",
+  "author": {
+    "name": "lixinghui"
+  },
+  "userConfig": {
+    "enabled": {
+      "title": "Enabled",
+      "type": "boolean",
+      "default": true,
+      "description": "Auto-format code blocks in assistant responses. Toggle in-session with /format-code."
+    }
+  },
+  "types": "./types/index.d.ts"
+}

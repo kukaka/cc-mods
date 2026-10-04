@@ -1,0 +1,16 @@
+{
+  "name": "cc-context-mod",
+  "version": "0.1.1",
+  "description": "Live context window forecast and MiniMax M Plan / Token Plan balance, drawn above the prompt.",
+  "author": {
+    "name": "lixinghui"
+  },
+  "userConfig": {
+    "baseUrl": {
+      "title": "API base URL",
+      "type": "string",
+      "default": "https://api.minimaxi.com",
+      "description": "Base URL of the MiniMax API. International accounts: use https://api.minimax.io"
+    }
+  }
+}

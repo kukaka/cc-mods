@@ -1,0 +1,21 @@
+{
+  "name": "cc-mods",
+  "owner": {
+    "name": "lixinghui"
+  },
+  "metadata": {
+    "description": "Personal Claude Code mods."
+  },
+  "plugins": [
+    {
+      "name": "cc-context-mod",
+      "source": "./cc-context-mod",
+      "description": "Live context window forecast and MiniMax M Plan / Token Plan balance, drawn above the prompt."
+    },
+    {
+      "name": "cc-code-format-mod",
+      "source": "./cc-code-format-mod",
+      "description": "Rewrites every fenced code block in an LLM response to the language's standard style (Prettier for the web stack, black for Python, gofmt / rustfmt / shfmt where installed)."
+    }
+  ]
+}

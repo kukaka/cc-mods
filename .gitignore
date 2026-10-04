@@ -1,0 +1,9 @@
+.DS_Store
+node_modules/
+*.log
+
+# Claude Code writes the mod's TypeScript types here each time it loads the mod.
+.claude-plugin/types/
+
+# Claude Code generates this on first load; it just extends types/tsconfig.json.
+tsconfig.json
