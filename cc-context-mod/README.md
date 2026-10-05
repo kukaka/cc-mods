@@ -116,9 +116,14 @@ Each "section" is its own Box; the outer Box has `flexWrap: 'wrap'` so a section
 | Hook           | What it does                                                        |
 |----------------|--------------------------------------------------------------------|
 | `session.start`| First context reading, first balance fetch, starts a 60s timer.    |
-| `turn.complete`| Takes a context reading after each main-loop turn. Subagent turns are skipped. |
+| `session.measure` (primary) | Engine-pushed context figure — `e.context` carries `{ tokens, window, percent }` directly, gated on `e.changed.includes('context')` so we only react when context actually moved. |
+| `session.append { door: 'tool-result' }` (main loop only) | Fires when a `tool_result` lands in the transcript, including subagent returns. Catches intra-turn context jumps that `session.measure` may not push for. The `!e.agentId` filter skips subagent-internal tool_results, which don't move the parent's `$.session.usage()`. |
+| `session.append { door: 'response' }` (main loop only) | Fires after each model response — the new `input_tokens` for that response is the freshest context figure available. |
+| `turn.complete`| Safety net: covers subagent turns (`session.measure` is documented as main-thread only) and any case `session.measure` / `session.append` missed. |
 | `ui.render` with `{component: "AbovePrompt"}` | Draws the band.                       |
 | `$.clock.every(60000, …)` | Re-fetches the balance so the windows stay current between turns. |
+
+Multiple hooks can report the same value (e.g. `session.measure` and `turn.complete` both firing at turn end). `readUsage` dedupes against the last real reading — same `tokens`+`window` means no movement, so the 12-bar chart doesn't fill with duplicate bars.
 
 The context reading is `$.session.usage()` — free, no breakdown. The balance reading is `$.http.fetch('${baseUrl}/v1/token_plan/remains', { headers: { Authorization: Bearer ${key} } })`. Rate-limited by a 30s minimum gap inside the module, on top of the 60s timer, so a burst of turns won't hammer the API.
 
@@ -128,7 +133,7 @@ Module state (history, latest reading) lives in module-level vars, exactly like 
 
 ## Limitations
 
-- Context updates after each turn, not during. The 60s balance timer covers the in-between.
+- The 60s balance timer covers any drift between context events.
 - The chart's bars are relative to the busiest reading shown. M Plan percentages are absolute.
 - One band per session — another plugin that draws `AbovePrompt` competes for the same row.
 - The M Plan side calls `$.http.fetch`, which `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` may block. With that variable set the band shows an HTTP error.

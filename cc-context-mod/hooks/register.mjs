@@ -4,15 +4,35 @@
 // cc-context-mod: a live forecast of the context window on the left,
 // and MiniMax M Plan / Token Plan balance on the right.
 //
-// Context window: $.session.usage().context after every turn (free).
+// Context window: session.measure's e.context (free) on the main trigger,
+// $.session.usage().context (also free) as fallback for the other hooks.
 // M Plan balance: GET /v1/token_plan/remains on the host, every 60s,
 // with the Subscription Key from $MINIMAX_SUBSCRIPTION_KEY.
 //
-// turn.complete / session.start: refresh the context reading.
-// session.start: also kick off the first balance fetch and a periodic timer
-//   so the M Plan windows stay current between turns.
+// session.measure (primary): the engine pushes usage figures here whenever
+//   they move — after each main-thread turn and when rate-limit windows
+//   move. e.context carries { tokens, window, percent } directly, so we
+//   don't need to poll $.session.usage() on every fire. Gate on
+//   e.changed.includes('context') so we don't churn when only rateLimits
+//   moved.
+// session.append { door: 'tool-result' | 'response' } (main loop only):
+//   catches intra-turn context growth that session.measure might not push
+//   for. A tool_result that lands in the parent's transcript (including a
+//   subagent's return) bumps the parent's context before the next model
+//   call; each new model response brings back input_tokens for what it
+//   just answered over. The !e.agentId filter drops subagent-internal
+//   rows — they don't move the parent's $.session.usage().
+// turn.complete: safety net for subagent turns and any case
+//   session.measure / session.append miss.
+// session.start: first reading, first balance fetch, starts a 60s timer.
 // ui.render (AbovePrompt): one band — context weather on the left, the
 //   5h and 7d M Plan windows on the right, separated by a divider.
+//
+// readUsage dedupes against the last real reading: when multiple hooks
+// report the same tokens+window (e.g. session.measure and turn.complete
+// both firing at turn end), only one bar is appended to the chart. The
+// seeded { pending: true } placeholder from session.start is dropped
+// inside readUsage once any hook pushes the first real reading.
 
 const HISTORY = 12;
 const REFRESH_MS = 60_000;        // poll the balance API every 60s
@@ -60,17 +80,44 @@ export function register(on, options) {
     return result;
   });
 
+  on("session.measure", async ($, e, next) => {
+    // Engine pushes figures here whenever a unit moved. Use the context
+    // it carried directly — no need to re-poll $.session.usage().
+    if (e.changed.includes("context")) {
+      await readUsage($, e.context);
+    }
+    return next(e);
+  });
+
+  on("session.append", { door: "tool-result" }, async ($, e, next) => {
+    // A tool_result just landed in the transcript. Main loop only:
+    // subagent-internal tool_results carry agentId and don't move
+    // $.session.usage() (which always returns the main session's window).
+    // This is where subagent returns and big tool outputs show up between
+    // model calls — before session.measure has a chance to push.
+    if (!e.agentId) {
+      await readUsage($);
+    }
+    return next(e);
+  });
+
+  on("session.append", { door: "response" }, async ($, e, next) => {
+    // A model response just landed. The new input_tokens for that
+    // response is the freshest context figure available; $.session.usage()
+    // should reflect it. Main loop only.
+    if (!e.agentId) {
+      await readUsage($);
+    }
+    return next(e);
+  });
+
   on("turn.complete", async ($, e, next) => {
     const result = await next(e);
-    if (e.agentId) return result;
-    const recorded = await readUsage($);
-    // If we just recorded the first real reading, the seeded "pending"
-    // placeholder above is now stale — drop it so the chart and trend
-    // are computed from real data only.
-    if (recorded && readings.length > 1 && readings[0].pending) {
-      readings.shift();
-      $.ui.invalidate("ui.render");
-    }
+    // Safety net: covers subagent turns (where session.measure is
+    // documented as main-thread only) and any case session.measure /
+    // session.append missed. Dedup in readUsage keeps this from bloating
+    // the chart when the same value arrives from multiple hooks.
+    await readUsage($);
     return result;
   });
 
@@ -81,30 +128,59 @@ export function register(on, options) {
   });
 }
 
-async function readUsage($) {
-  try {
-    const usage = await $.session.usage();
-    if (!usage || !usage.context || !usage.context.window) return false;
-    const tokens = usage.context.tokens;
-    // Skip zero / placeholder readings: a fresh session reads 0 before the
-    // first response, and seeding a 0 here would leave the band stuck at
-    // "0% of context" until the first real turn.complete fires (and never
-    // clears if the user is just looking at the prompt, or if the first turn
-    // happens to be a subagent one we skip). The band shows a "—  / 1M"
-    // placeholder via the `pending` reading seeded in session.start, until a
-    // real reading arrives.
-    if (!Number.isFinite(tokens) || tokens <= 0) return false;
-    const percent = Math.round(
-      usage.context.percent ?? (tokens / usage.context.window) * 100
-    );
-    readings.push({ tokens, window: usage.context.window, percent });
-    if (readings.length > HISTORY) readings = readings.slice(-HISTORY);
-    $.ui.invalidate("ui.render");
-    return true;
-  } catch {
-    // Keep the previous reading.
+async function readUsage($, ctx = null) {
+  let tokens, window, percent;
+  if (ctx) {
+    // session.measure hands us the figure directly — no $.session.usage() call.
+    ({ tokens, window, percent } = ctx);
+  } else {
+    try {
+      const usage = await $.session.usage();
+      if (!usage || !usage.context || !usage.context.window) return false;
+      tokens = usage.context.tokens;
+      window = usage.context.window;
+      percent = usage.context.percent;
+    } catch {
+      // Keep the previous reading.
+      return false;
+    }
+  }
+  // Skip zero / placeholder readings: a fresh session reads 0 before the
+  // first response, and seeding a 0 here would leave the band stuck at
+  // "0% of context" until the first real hook fires. The band shows a
+  // "—  / 1M" placeholder via the `pending` reading seeded in
+  // session.start, until a real reading arrives.
+  if (
+    !Number.isFinite(tokens) ||
+    tokens <= 0 ||
+    !Number.isFinite(window) ||
+    window <= 0
+  ) {
     return false;
   }
+  // Dedupe against the last real reading: same tokens+window means no
+  // movement, so multiple hooks reporting the same state (e.g. session.measure
+  // and turn.complete both firing at turn end) don't bloat the chart.
+  const last = readings[readings.length - 1];
+  if (
+    last &&
+    !last.pending &&
+    last.tokens === tokens &&
+    last.window === window
+  ) {
+    return false;
+  }
+  const finalPercent = Math.round(percent ?? (tokens / window) * 100);
+  readings.push({ tokens, window, percent: finalPercent });
+  // Drop the seeded "pending" placeholder once a real reading arrives,
+  // regardless of which hook supplied it — so the chart and trend are
+  // computed from real data only.
+  if (readings[0]?.pending && readings.length > 1) {
+    readings.shift();
+  }
+  if (readings.length > HISTORY) readings = readings.slice(-HISTORY);
+  $.ui.invalidate("ui.render");
+  return true;
 }
 
 let timer = null;
