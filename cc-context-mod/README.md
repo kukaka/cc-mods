@@ -91,6 +91,7 @@ Error states, all visible in the band:
 
 | Band shows              | Means                                                     |
 |-------------------------|-----------------------------------------------------------|
+| `☀  Clear   —% of context   —  / 1M` | No context reading yet (right after `session.start`, before the first turn completes) — same shape as a real reading, dimmed |
 | `M Plan: HTTP 401`      | Bad / missing Subscription Key                            |
 | `M Plan: ECONNRESET`    | Wrong host — switch `baseUrl` (international vs. China)   |
 | `M Plan: login fail…`   | Subscription Key wrong, or pay-as-you-go key on this endpoint |

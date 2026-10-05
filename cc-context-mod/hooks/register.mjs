@@ -46,6 +46,15 @@ export function register(on, options) {
     balance = null;
     lastFetchAt = 0;
     await readUsage($);
+    // If readUsage had no real numbers to record (common on a fresh
+    // session — $.session.usage() returns 0 before the first response),
+    // seed a "pending" reading so the band can render immediately with a
+    // "—  / 1M" placeholder. Real data replaces it as soon as
+    // turn.complete records a real reading.
+    if (readings.length === 0) {
+      readings.push({ pending: true });
+    }
+    $.ui.invalidate("ui.render");
     await refreshBalance($, baseUrl);
     startRefresh($, baseUrl);
     return result;
@@ -54,13 +63,19 @@ export function register(on, options) {
   on("turn.complete", async ($, e, next) => {
     const result = await next(e);
     if (e.agentId) return result;
-    await readUsage($);
+    const recorded = await readUsage($);
+    // If we just recorded the first real reading, the seeded "pending"
+    // placeholder above is now stale — drop it so the chart and trend
+    // are computed from real data only.
+    if (recorded && readings.length > 1 && readings[0].pending) {
+      readings.shift();
+      $.ui.invalidate("ui.render");
+    }
     return result;
   });
 
   on("ui.render", { component: "AbovePrompt" }, ($, e, next) => {
     if (e.hasSurvey) return next(e);
-    if (readings.length === 0) return next(e);
     const { Box, Text } = $.ui.resolve(e);
     return band(Box, Text, e.bodyColumns ?? 80);
   });
@@ -69,23 +84,26 @@ export function register(on, options) {
 async function readUsage($) {
   try {
     const usage = await $.session.usage();
-    if (!usage || !usage.context || !usage.context.window) return;
+    if (!usage || !usage.context || !usage.context.window) return false;
     const tokens = usage.context.tokens;
     // Skip zero / placeholder readings: a fresh session reads 0 before the
     // first response, and seeding a 0 here would leave the band stuck at
     // "0% of context" until the first real turn.complete fires (and never
     // clears if the user is just looking at the prompt, or if the first turn
-    // happens to be a subagent one we skip). The band renders as soon as a
+    // happens to be a subagent one we skip). The band shows a "—  / 1M"
+    // placeholder via the `pending` reading seeded in session.start, until a
     // real reading arrives.
-    if (!Number.isFinite(tokens) || tokens <= 0) return;
+    if (!Number.isFinite(tokens) || tokens <= 0) return false;
     const percent = Math.round(
       usage.context.percent ?? (tokens / usage.context.window) * 100
     );
     readings.push({ tokens, window: usage.context.window, percent });
     if (readings.length > HISTORY) readings = readings.slice(-HISTORY);
     $.ui.invalidate("ui.render");
+    return true;
   } catch {
     // Keep the previous reading.
+    return false;
   }
 }
 
@@ -198,9 +216,14 @@ function msToIso(ms) {
 // --- drawing ---------------------------------------------------------------
 
 function band(Box, Text, columns) {
+  // The latest reading is "usable" only when we have real numbers. Before
+  // the first turn completes, session.start seeded a `{ pending: true }`
+  // reading so the band can render immediately with a placeholder instead
+  // of being absent.
   const now = readings[readings.length - 1];
-  const ctx = forecastFor(now.percent);
-  const trend = trendWord();
+  const hasData = !!now && !now.pending && Number.isFinite(now.tokens) && now.tokens > 0;
+  const ctx = hasData ? forecastFor(now.percent) : null;
+  const trend = hasData ? trendWord() : "";
 
   // Width-based layout decisions.
   const showChart = columns >= 100;
@@ -212,22 +235,35 @@ function band(Box, Text, columns) {
   const sections = [];
 
   // Section 1: forecast (always shown).
+  // No-data placeholder mirrors the real data shape (icon + word +
+  // "X% of context" + "X / Y") so the band stays the same width when the
+  // first reading arrives — just switches from dim placeholders to real
+  // values. Default forecast is Clear (the band a 0-token reading lands in).
+  const placeholder = forecastFor(0);
   sections.push(
     Box({
       flexDirection: "row",
-      children: [
-        Text({ color: ctx.color, bold: true, children: `${ctx.icon}  ${ctx.word}` }),
-        Text({ children: `  ${now.percent}% of context` }),
-        Text({
-          dimColor: true,
-          children: `  ${short(now.tokens)} / ${short(now.window)}`,
-        }),
-      ],
+      children: hasData
+        ? [
+            Text({ color: ctx.color, bold: true, children: `${ctx.icon}  ${ctx.word}` }),
+            Text({ children: `  ${now.percent}% of context` }),
+            Text({
+              dimColor: true,
+              children: `  ${short(now.tokens)} / ${short(now.window)}`,
+            }),
+          ]
+        : [
+            Text({ dimColor: true, children: `${placeholder.icon}  ${placeholder.word}` }),
+            Text({ dimColor: true, children: "  —% of context" }),
+            Text({ dimColor: true, children: "  —  / 1M" }),
+          ],
     })
   );
 
-  // Section 2: chart of recent turns + trend (only on wide terminals).
-  if (showChart) {
+  // Section 2: chart of recent turns + trend (only on wide terminals, and
+  // only once we have at least one real reading — chart/trend are nonsense
+  // off a single placeholder).
+  if (showChart && hasData) {
     const chartChildren = [
       Text({ dimColor: true, children: "   last turns " }),
       Text({ color: ctx.color, children: chart() }),
@@ -322,8 +358,10 @@ function forecastFor(percent) {
 
 // Bars scale to the busiest reading shown, so growth shows at any fill level.
 function chart() {
-  const top = Math.max(...readings.map((r) => r.tokens), 1);
-  return readings
+  const real = readings.filter((r) => !r.pending);
+  if (real.length === 0) return "";
+  const top = Math.max(...real.map((r) => r.tokens), 1);
+  return real
     .map((r) =>
       BARS[Math.min(BARS.length - 1, Math.floor((r.tokens / top) * (BARS.length - 1)))]
     )
@@ -331,8 +369,9 @@ function chart() {
 }
 
 function trendWord() {
-  if (readings.length < 2) return "";
-  const delta = readings[readings.length - 1].tokens - readings[readings.length - 2].tokens;
+  const real = readings.filter((r) => !r.pending);
+  if (real.length < 2) return "";
+  const delta = real[real.length - 1].tokens - real[real.length - 2].tokens;
   if (delta > 0) return `▲ +${short(delta)} last turn`;
   if (delta < 0) return `▼ ${short(-delta)} last turn`;
   return "steady";
