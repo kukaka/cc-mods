@@ -15,6 +15,14 @@
 //   don't need to poll $.session.usage() on every fire. Gate on
 //   e.changed.includes('context') so we don't churn when only rateLimits
 //   moved.
+// session.compact: catches /compact and autocompact, where session.measure
+//   does not necessarily push a new measurement (the boundary notice
+//   lands as a session.append, but the conversation is just shorter now —
+//   no guarantee the engine remeasures). The result of next(e) is
+//   SessionCompacted with the engine's own tokensAfter, used as the
+//   post-compact reading; precompute runs omit tokensAfter, so we fall
+//   back to readUsage($) for those. The !e.agentId filter skips subagent
+//   compactions — they don't move the main window.
 // session.append { door: 'tool-result' | 'response' } (main loop only):
 //   catches intra-turn context growth that session.measure might not push
 //   for. A tool_result that lands in the parent's transcript (including a
@@ -23,7 +31,7 @@
 //   just answered over. The !e.agentId filter drops subagent-internal
 //   rows — they don't move the parent's $.session.usage().
 // turn.complete: safety net for subagent turns and any case
-//   session.measure / session.append miss.
+//   session.measure / session.compact / session.append miss.
 // session.start: first reading, first balance fetch, starts a 60s timer.
 // ui.render (AbovePrompt): one band — context weather on the left, the
 //   5h and 7d M Plan windows on the right, separated by a divider.
@@ -87,6 +95,43 @@ export function register(on, options) {
       await readUsage($, e.context);
     }
     return next(e);
+  });
+
+  on("session.compact", async ($, e, next) => {
+    // Runs around /compact, autocompact, or a plugin's $.session.compact()
+    // call. After next(e) the engine has installed the summary and the
+    // kept messages; the result is SessionCompacted with the engine's own
+    // tokensAfter (the freshest context figure we have here — session.measure
+    // does not necessarily push a new measurement after a compaction).
+    // Subagent compactions (e.agentId set) don't move the main window,
+    // so they get the same skip as session.append's main-loop filter.
+    const result = await next(e);
+    if (!e.agentId && result && !result.skip) {
+      if (Number.isFinite(result.tokensAfter) && result.tokensAfter > 0) {
+        // Merge tokensAfter with the session's window — $.session.usage()
+        // already reflects the post-compact state here. The combined
+        // record clears the dedupe in readUsage so the drop shows up in
+        // the chart instead of being silently skipped.
+        try {
+          const usage = await $.session.usage();
+          if (usage?.context?.window > 0) {
+            await readUsage($, {
+              tokens: result.tokensAfter,
+              window: usage.context.window,
+              percent: (result.tokensAfter / usage.context.window) * 100,
+            });
+            return result;
+          }
+        } catch {
+          // Fall through to readUsage($).
+        }
+      }
+      // Precompute runs and any case where the engine didn't record
+      // tokensAfter: readUsage($) reads from $.session.usage(), which the
+      // engine keeps up to date.
+      await readUsage($);
+    }
+    return result;
   });
 
   on("session.append", { door: "tool-result" }, async ($, e, next) => {

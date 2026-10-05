@@ -1,6 +1,6 @@
 {
   "name": "cc-context-mod",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Live context window forecast and MiniMax M Plan / Token Plan balance, drawn above the prompt.",
   "author": {
     "name": "lixinghui"

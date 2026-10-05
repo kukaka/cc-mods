@@ -117,13 +117,14 @@ Each "section" is its own Box; the outer Box has `flexWrap: 'wrap'` so a section
 |----------------|--------------------------------------------------------------------|
 | `session.start`| First context reading, first balance fetch, starts a 60s timer.    |
 | `session.measure` (primary) | Engine-pushed context figure — `e.context` carries `{ tokens, window, percent }` directly, gated on `e.changed.includes('context')` so we only react when context actually moved. |
+| `session.compact` | After `/compact`, autocompact, or a plugin's `$.session.compact()` — `next(e)`'s `SessionCompacted` carries the engine's own `tokensAfter` (the freshest context figure; `session.measure` does not necessarily remeasure after a compaction). Merged with the session's `window` and recorded as a fresh reading, so the chart shows the drop. Falls back to `readUsage($)` for precompute runs that don't record `tokensAfter`. The `!e.agentId` filter skips subagent compactions, which don't move the main window. |
 | `session.append { door: 'tool-result' }` (main loop only) | Fires when a `tool_result` lands in the transcript, including subagent returns. Catches intra-turn context jumps that `session.measure` may not push for. The `!e.agentId` filter skips subagent-internal tool_results, which don't move the parent's `$.session.usage()`. |
 | `session.append { door: 'response' }` (main loop only) | Fires after each model response — the new `input_tokens` for that response is the freshest context figure available. |
-| `turn.complete`| Safety net: covers subagent turns (`session.measure` is documented as main-thread only) and any case `session.measure` / `session.append` missed. |
+| `turn.complete`| Safety net: covers subagent turns (`session.measure` is documented as main-thread only) and any case `session.measure` / `session.compact` / `session.append` missed. |
 | `ui.render` with `{component: "AbovePrompt"}` | Draws the band.                       |
 | `$.clock.every(60000, …)` | Re-fetches the balance so the windows stay current between turns. |
 
-Multiple hooks can report the same value (e.g. `session.measure` and `turn.complete` both firing at turn end). `readUsage` dedupes against the last real reading — same `tokens`+`window` means no movement, so the 12-bar chart doesn't fill with duplicate bars.
+Multiple hooks can report the same value (e.g. `session.measure` and `turn.complete` both firing at turn end). `readUsage` dedupes against the last real reading — same `tokens`+`window` means no movement, so the 12-bar chart doesn't fill with duplicate bars. After `/compact`, the chart shows the drop naturally (a tall bar followed by a short one), and `▲ +X last turn` becomes `▼ -X last turn` for that delta — accurate, not reset.
 
 The context reading is `$.session.usage()` — free, no breakdown. The balance reading is `$.http.fetch('${baseUrl}/v1/token_plan/remains', { headers: { Authorization: Bearer ${key} } })`. Rate-limited by a 30s minimum gap inside the module, on top of the 60s timer, so a burst of turns won't hammer the API.
 
