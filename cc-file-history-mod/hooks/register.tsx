@@ -599,18 +599,30 @@ function renderPane($: EngineInterface, e: PaneRenderEvent) {
     flexDirection: 'row',
     gap: 1,
     children: [
-      // The engine renders Pane chrome text in a dim/light shade that
-      // sits low-contrast against the chrome's dark fill in light
-      // terminals. Pin the title to pure white so the title row is
-      // always high-contrast on the dark chrome (both light and dark
-      // terminal modes render chrome the same dark color).
+      // The engine renders Pane chrome in a fixed dark fill in both light
+      // and dark terminal modes, but the default Text colour (and the
+      // Button label colour) adapts to the terminal — in a light terminal
+      // it's dark, on top of the dark chrome that becomes near-invisible.
+      //
+      // For Text we can pin `color: 'white'` directly. For Button the
+      // props don't include `color` (ButtonProps at index.d.ts:1000 only
+      // exposes `dimColor`, `variant`, `plain`, `hover`), so `color:
+      // 'white'` is silently dropped — that's why the buttons stay
+      // invisible after a `color: 'white'` edit. The Button-level escape
+      // is `variant: 'primary'`, which makes the terminal render the
+      // label in the engine's accent colour (bright in both terminal
+      // modes, so it always contrasts with the dark Pane chrome). We
+      // mark every Button primary; Close / Show / Revert are the only
+      // pressable leaves on each surface, so "the one to press" reads
+      // honestly. The status-char accents (red / yellow / green) already
+      // sit on the bright side of the palette and need no override.
       Text({ bold: true, color: 'white', children: 'File history' }),
       Text({
         color: 'white',
         children: `${totalFiles} file${totalFiles === 1 ? '' : 's'}, ${totalEdits} edit${totalEdits === 1 ? '' : 's'}`,
       }),
       Box({ flexGrow: 1 }),
-      Button({ key: 'close', label: 'Close', onPress: closePane }),
+      Button({ key: 'close', label: 'Close', variant: 'primary', onPress: closePane }),
     ],
   })
 
@@ -619,7 +631,10 @@ function renderPane($: EngineInterface, e: PaneRenderEvent) {
       flexDirection: 'column',
       paddingX: 1,
       gap: 1,
-      children: [header, Text({ dimColor: true, children: 'no edits captured yet' })],
+      children: [
+        header,
+        Text({ color: 'white', children: 'no edits captured yet' }),
+      ],
     })
   }
 
@@ -650,8 +665,9 @@ const kindLabel = (rec: EditRecord): string => {
       flexDirection: 'row',
       gap: 1,
       children: [
-        Text({ bold: true, children: g.filePath }),
+        Text({ bold: true, color: 'white', children: g.filePath }),
         Text({
+          color: 'white',
           children: `${g.records.length} edit${g.records.length === 1 ? '' : 's'}`,
         }),
       ],
@@ -675,14 +691,14 @@ const kindLabel = (rec: EditRecord): string => {
       const rowChildren: unknown[] = []
 
       rowChildren.push(Text({ color: status.color, children: status.char }))
-      rowChildren.push(Text({ children: formatTime(rec.ts) }))
-      rowChildren.push(Text({ children: kindLabel(rec) }))
+      rowChildren.push(Text({ color: 'white', children: formatTime(rec.ts) }))
+      rowChildren.push(Text({ color: 'white', children: kindLabel(rec) }))
 
       if (rec.beforeExists && typeof rec.before === 'string') {
         const lines = rec.before.split('\n').length
         rowChildren.push(
           Text({
-            dimColor: true,
+            color: 'white',
             children: `(${lines} line${lines === 1 ? '' : 's'} before)`,
           }),
         )
@@ -707,25 +723,26 @@ const kindLabel = (rec: EditRecord): string => {
           Button({
             key: `diff-${rec.id}`,
             label: isOpen ? 'Hide' : 'Show',
+            variant: 'primary',
             onPress: showDiff,
           }),
         )
       } else if (rec.beforeExists && typeof rec.before === 'string') {
         // Have before but no after — the file read after `next(e)` failed.
         // Surface it explicitly so the user knows why the toggle is missing.
-        rowChildren.push(Text({ dimColor: true, children: '(no diff: after missing)' }))
+        rowChildren.push(Text({ color: 'white', children: '(no diff: after missing)' }))
       } else if (rec.kind === 'edit') {
         // Edit without a hunk shouldn't happen (input always carries it), but
         // be defensive — no message to avoid a misleading "missing".
-        rowChildren.push(Text({ dimColor: true, children: '(no diff)' }))
+        rowChildren.push(Text({ color: 'white', children: '(no diff)' }))
       }
 
       if (rec.applied) {
         rowChildren.push(
-          Button({ key: `revert-${rec.id}`, label: 'Revert', onPress: revert }),
+          Button({ key: `revert-${rec.id}`, label: 'Revert', variant: 'primary', onPress: revert }),
         )
       } else {
-        rowChildren.push(Text({ dimColor: true, children: '(failed)' }))
+        rowChildren.push(Text({ color: 'white', children: '(failed)' }))
       }
 
       const mainRow = Box({ flexDirection: 'row', gap: 1, children: rowChildren })
@@ -738,11 +755,11 @@ const kindLabel = (rec: EditRecord): string => {
       const diffText = diffCache.get(rec.id)
       const diffBody: unknown[] = []
       if (diffText === undefined) {
-        diffBody.push(Text({ dimColor: true, children: 'computing diff…' }))
+        diffBody.push(Text({ color: 'white', children: 'computing diff…' }))
       } else if (diffText === null) {
-        diffBody.push(Text({ dimColor: true, children: 'diff unavailable' }))
+        diffBody.push(Text({ color: 'white', children: 'diff unavailable' }))
       } else if (diffText === '') {
-        diffBody.push(Text({ dimColor: true, children: '(no textual change)' }))
+        diffBody.push(Text({ color: 'white', children: '(no textual change)' }))
       } else {
         // Code truncates at 10000 chars; we slice to the start so a giant
         // diff still draws something. The end-of-input marker tells the
