@@ -21,6 +21,11 @@
       "name": "cc-notify-mod",
       "source": "./cc-notify-mod",
       "description": "Forwards Claude Code task completion, repeated Bash failures, and AskUserQuestion prompts to the macOS Notification Center, with a one-line focus/status indicator above the prompt."
+    },
+    {
+      "name": "cc-file-history-mod",
+      "source": "./cc-file-history-mod",
+      "description": "Panel listing files edited by Claude in the current session, with a one-click Revert per edit that restores the file to its pre-edit content. Open with /file-history."
     }
   ]
 }

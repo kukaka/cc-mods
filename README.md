@@ -18,6 +18,7 @@ cc-mods/
 | [`cc-context-mod`](./cc-context-mod)         | One-line dashboard above the prompt: context window weather (left) + MiniMax M Plan / Token Plan balance (right).                                                      |
 | [`cc-code-format-mod`](./cc-code-format-mod) | Reformats every fenced code block in an LLM response to the language's standard style (Prettier, black, gofmt, rustfmt, shfmt) before the row lands in the transcript. |
 | [`cc-notify-mod`](./cc-notify-mod)           | Forwards `turn.complete` / repeated `Bash` failures / `AskUserQuestion` prompts to the macOS Notification Center when you are away from the terminal.                  |
+| [`cc-file-history-mod`](./cc-file-history-mod) | Panel listing every file Claude has edited this session, with a one-click **Revert** per edit that restores the file to its pre-edit content. Open with `/file-history`. |
 
 ## Install
 
