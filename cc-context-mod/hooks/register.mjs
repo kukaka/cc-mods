@@ -15,14 +15,30 @@
 //   don't need to poll $.session.usage() on every fire. Gate on
 //   e.changed.includes('context') so we don't churn when only rateLimits
 //   moved.
-// session.compact: catches /compact and autocompact, where session.measure
-//   does not necessarily push a new measurement (the boundary notice
-//   lands as a session.append, but the conversation is just shorter now —
-//   no guarantee the engine remeasures). The result of next(e) is
-//   SessionCompacted with the engine's own tokensAfter, used as the
-//   post-compact reading; precompute runs omit tokensAfter, so we fall
-//   back to readUsage($) for those. The !e.agentId filter skips subagent
-//   compactions — they don't move the main window.
+// session.compact: catches /compact and autocompact (and /rewind's
+//   "Summarize from here/up to here", which is the same engine path),
+//   where session.measure does not necessarily push a new measurement
+//   (the boundary notice lands as a session.append, but the conversation
+//   is just shorter now — no guarantee the engine remeasures). The
+//   result of next(e) is SessionCompacted with the engine's own
+//   tokensAfter, used as the post-compact reading; precompute runs omit
+//   tokensAfter, so we fall back to readUsage($) for those. The
+//   !e.agentId filter skips subagent compactions — they don't move the
+//   main window.
+// session.end { reason: 'clear' | 'resume' }: catches the cases that
+//   end one conversation and start another in the same process without
+//   firing session.start for it: /clear (and aliases /reset, /new),
+//   /resume, --resume, --continue, /branch. Without this hook the
+//   chart, balance and lastFetchAt keep their old-session values until
+//   the next turn — the band shows the prior percentage and stale bars
+//   until session.measure / session.append finally push. We mirror the
+//   session.start reset (history → empty, balance → null, fetch gap →
+//   0, then a pending placeholder — no readUsage here, see the hook)
+//   so the band reads as fresh the instant the engine hands control
+//   back. Other reasons (prompt_input_exit / logout / other) mean the
+//   process itself is leaving — module state goes with it, no reset
+//   needed. The 60s balance timer is already running from
+//   session.start and stays running across these.
 // session.append { door: 'tool-result' | 'response' } (main loop only):
 //   catches intra-turn context growth that session.measure might not push
 //   for. A tool_result that lands in the parent's transcript (including a
@@ -31,7 +47,7 @@
 //   just answered over. The !e.agentId filter drops subagent-internal
 //   rows — they don't move the parent's $.session.usage().
 // turn.complete: safety net for subagent turns and any case
-//   session.measure / session.compact / session.append miss.
+//   session.measure / session.compact / session.append / session.end miss.
 // session.start: first reading, first balance fetch, starts a 60s timer.
 // ui.render (AbovePrompt): one band — context weather on the left, the
 //   5h and 7d M Plan windows on the right, separated by a divider.
@@ -39,8 +55,9 @@
 // readUsage dedupes against the last real reading: when multiple hooks
 // report the same tokens+window (e.g. session.measure and turn.complete
 // both firing at turn end), only one bar is appended to the chart. The
-// seeded { pending: true } placeholder from session.start is dropped
-// inside readUsage once any hook pushes the first real reading.
+// seeded { pending: true } placeholder from session.start (and
+// session.end on /clear or /resume) is dropped inside readUsage once
+// any hook pushes the first real reading.
 
 const HISTORY = 12;
 const REFRESH_MS = 60_000;        // poll the balance API every 60s
@@ -134,6 +151,42 @@ export function register(on, options) {
     return result;
   });
 
+  on("session.end", async ($, e, next) => {
+    // /clear, /reset, /new → reason 'clear': the conversation ends, the
+    // process goes on under a fresh session id, and (per the engine docs)
+    // no session.start fires for it. /resume, --resume, --continue,
+    // /branch → reason 'resume': another session takes its place in the
+    // same process. In both cases the plugin stays loaded but its
+    // module-level state (history, latest reading, last balance fetch)
+    // is from the old session and would otherwise stick in the band —
+    // session.measure on the new session's first turn eventually pushes
+    // the right number, but until then the chart shows stale bars and
+    // the balance reflects the old session's fetch gap. Mirror the
+    // session.start reset so the band reads as fresh the moment the
+    // engine hands control back. prompt_input_exit / logout / other all
+    // mean the process itself is leaving — module state goes with it,
+    // no reset needed.
+    const result = await next(e);
+    if (e.reason === "clear" || e.reason === "resume") {
+      readings = [];
+      balance = null;
+      lastFetchAt = 0;
+      // Don't call readUsage($) here. Right after next(e) the engine is
+      // mid-handoff between sessions: $.session.usage() may still
+      // answer with the *old* session's figures, which we'd then record
+      // as the new reading and the band would keep showing the prior
+      // percentage. Skipping readUsage and seeding the pending
+      // placeholder is safe — the first session.measure / session.append
+      // / turn.complete on the new session drops the placeholder and
+      // records the real value, the same shape session.start falls back
+      // to before its first response.
+      readings.push({ pending: true });
+      $.ui.invalidate("ui.render");
+      await refreshBalance($, baseUrl);
+    }
+    return result;
+  });
+
   on("session.append", { door: "tool-result" }, async ($, e, next) => {
     // A tool_result just landed in the transcript. Main loop only:
     // subagent-internal tool_results carry agentId and don't move
@@ -160,8 +213,9 @@ export function register(on, options) {
     const result = await next(e);
     // Safety net: covers subagent turns (where session.measure is
     // documented as main-thread only) and any case session.measure /
-    // session.append missed. Dedup in readUsage keeps this from bloating
-    // the chart when the same value arrives from multiple hooks.
+    // session.compact / session.append / session.end missed. Dedup in
+    // readUsage keeps this from bloating the chart when the same value
+    // arrives from multiple hooks.
     await readUsage($);
     return result;
   });
