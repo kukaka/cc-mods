@@ -1,19 +1,26 @@
 // cc-file-history-mod
 //
 // Captures every Edit / Write Claude issues this session and lets the user
-// revert any one of them. Single surface:
+// revert any one of them. Two surfaces:
 //
-//   Pane — opened on demand by /file-history. Has the engine's dark chrome
-//   (a fixed engine choice, not plugin-controllable), so on a light terminal
-//   it looks wrong; we open it explicitly only when the user actually wants
-//   to look at the full list or revert.
+//   AbovePrompt band — auto-shown once the first edit lands. A single row
+//   reading "▶ File history: N edits (M files)" with a [View] button. Click
+//   it (or press `v`) to open the Pane. The band hides while the Pane is
+//   open, and hides entirely when there are no edits to show.
 //
-// Slash command: /file-history — open / close the Pane.
+//   Pane — opened on demand by the band's [View] or the /file-history slash
+//   command. Has the engine's dark chrome (a fixed engine choice, not
+//   plugin-controllable), so on a light terminal it looks wrong; we open
+//   it explicitly only when the user actually wants the full list or to
+//   revert. Close button + Escape + engine X return to the band.
+//
+// Slash command: /file-history — toggle the Pane (secondary to the band).
 //
 // State is module-local. A session.start, classic.SessionStart
-// { clear|resume|fork }, or hot reload resets it. `paneOpen` is best-effort:
-// if they close via the engine's X / Esc, our local flag lags until the next
-// /file-history, at which point the toggle fights itself for one round.
+// { clear|resume|fork }, or hot reload resets it. `paneOpen` is kept in
+// sync with the engine via the on('ui.close', ...) hook, so X / Escape
+// closing the Pane updates the flag immediately and the next /file-history
+// doesn't fight itself.
 
 import type { EngineInterface, Register } from 'claude-code'
 
@@ -172,47 +179,10 @@ async function recordTool<E extends FileEditInput>(
     ],
     200,
   )
-  // First edit of a session auto-opens the Pane — the user clearly wants
-  // visibility into what just happened. `$.ui.open` is idempotent and safe
-  // against a Pane the user has already manually opened or focused on
-  // another surface; `paneOpen` may be stale (X / Esc close paths bypass
-  // our local flag) but we don't gate on it — the cost of one extra
-  // open call is a small toast at worst. Subsequent edits leave the Pane
-  // alone, so a manual close sticks for the rest of the session.
-  //
-  // Defensive: `$.ui.open` may throw or return `{ isPlaced: false }` from
-  // a tool.call context. Some specific refusal reasons the engine gives:
-//   - "below 110 columns … an id the person opened before": a plugin-
-  //     initiated open counts as "unasked" on narrow terminals; the pane
-  //     will only draw after the user has explicitly /file-history'd at
-  //     least once (which marks it as person-opened). Tell the user so.
-  //   - other surfaces / contexts the engine won't place a pane from.
-  // Either case must NOT make the edit itself fail — the file is already
-  // written by `next(e)`, we just couldn't pop a Pane.
-  if (edits.length === 1) {
-    try {
-      const r = await $.ui.open({
-        id: PANE_ID,
-        title: 'File history',
-        focus: true,
-        closeOnEscape: true,
-      })
-      paneOpen = r.isPlaced === true
-      if (!r.isPlaced) {
-        const reason = 'reason' in r ? String(r.reason) : 'unknown'
-        const hint = reason.includes('below 110 columns')
-          ? ' — type /file-history once to unlock'
-          : ''
-        $.ui.toast(
-          `file-history auto-open refused${hint}: ${reason}`,
-          { timeoutMs: 6000 },
-        )
-      }
-    } catch (err) {
-      const msg = String((err as { message?: string })?.message ?? err)
-      $.ui.toast(`file-history auto-open failed: ${msg}`, { timeoutMs: 4000 })
-    }
-  }
+  // The AbovePrompt band refreshes via the invalidate below — it's the user's
+  // signal that an edit just happened. The Pane is opt-in: a band [View]
+  // click or a /file-history call is what opens it. The previous auto-open
+  // on the first edit is gone; the band replaced that role.
   $.ui.invalidate('ui.render')
   return result
 }
@@ -800,6 +770,101 @@ const kindLabel = (rec: EditRecord): string => {
 }
 
 // ---------------------------------------------------------------------------
+// AbovePrompt band — single-row hint with a [View] button.
+//
+//   1. Empty state (no edits captured yet) → no tree; the handler yields
+//      via next(e) so cc-context-mod / cc-notify-mod / the engine's own
+//      surfaces can still draw their band.
+//   2. Pane already open → no tree; the band would just duplicate the
+//      Pane's title bar.
+//   3. Otherwise → "▶ File history: N edits (M files)" + [View].
+//
+// Layout note (why this is so plain): an earlier AbovePrompt build in this
+// mod tried nested Boxes / flexWrap / flexGrow:1 spacers and rendered
+// inconsistently — sometimes occluding cc-context-mod, sometimes
+// disappearing. The replay-theater mod (claude-code-playground) uses the
+// flat shape below and works. Keep it flat. If a future feature wants
+// richer band content (file basenames, +N/-M, etc.), prefer more Text
+// children in this row before reaching for nested Boxes — flexWrap and
+// flexGrow:1 stay banned here.
+// ---------------------------------------------------------------------------
+
+type BandRenderEvent = {
+  surface: string
+  props?: { bodyColumns?: number }
+}
+
+function renderBand(
+  $: EngineInterface,
+  e: BandRenderEvent,
+): unknown | null {
+  type El = (props: Record<string, unknown> & { children?: unknown }) => unknown
+  const { Box, Text, Button } = $.ui.resolve(e) as {
+    Box: El
+    Text: El
+    Button: El
+  }
+
+  // Empty + Pane-open cases both yield — the handler `next(e)`s for us.
+  if (edits.length === 0 || paneOpen) return null
+
+  const totalFiles = groupByFile(edits).length
+  const totalEdits = edits.length
+
+  const openPane = async () => {
+    try {
+      const r = await $.ui.open({
+        id: PANE_ID,
+        title: 'File history',
+        focus: true,
+        closeOnEscape: true,
+      })
+      paneOpen = r.isPlaced === true
+      if (!r.isPlaced) {
+        const reason = 'reason' in r ? String(r.reason) : 'unknown'
+        const hint = reason.includes('below 110 columns')
+          ? ' — type /file-history once to unlock'
+          : ''
+        $.ui.toast(
+          `file-history: pane open refused${hint}: ${reason}`,
+          { timeoutMs: 6000 },
+        )
+      }
+    } catch (err) {
+      const msg = String((err as { message?: string })?.message ?? err)
+      $.ui.toast(`file-history: pane open failed: ${msg}`, {
+        timeoutMs: 4000,
+      })
+    }
+    // Re-draw the band now that `paneOpen` flipped — if it didn't place,
+    // the band stays visible; if it did, the band yields and the Pane
+    // renders. The hotkey `v` also reaches the band, so this is the path
+    // for both click and keyboard.
+    $.ui.invalidate('ui.render')
+  }
+
+  return Box({
+    flexDirection: 'row',
+    gap: 2,
+    paddingX: 1,
+    children: [
+      Text({
+        color: 'magenta',
+        bold: true,
+        children: `▶ File history: ${totalEdits} edit${totalEdits === 1 ? '' : 's'} (${totalFiles} file${totalFiles === 1 ? '' : 's'})`,
+      }),
+      Button({
+        key: 'open-pane',
+        label: 'View',
+        hotkey: 'v',
+        variant: 'primary',
+        onPress: openPane,
+      }),
+    ],
+  })
+}
+
+// ---------------------------------------------------------------------------
 // Register.
 // ---------------------------------------------------------------------------
 
@@ -868,10 +933,79 @@ export const register: Register = (on) => {
     recordBash($, e as BashToolInput, next as never) as never,
   )
 
-  // Pane: opened on demand by /file-history. Engine-controlled dark chrome
-  // is the cost of an interactive sidebar with multiple Buttons — the user
-  // pays for the chrome only when they choose to look at the list.
+  // Pane: opened on demand by the band's [View] button or /file-history.
+  // Engine-controlled dark chrome is the cost of an interactive sidebar
+  // with multiple Buttons — the user pays for the chrome only when they
+  // choose to look at the list or revert.
   on('ui.render', { component: 'Pane', requestId: PANE_ID }, ($, e) => {
     return renderPane($, e as never) as never
+  })
+
+  // AbovePrompt band: auto-shown once an edit lands.
+//
+// Coexistence: the band is shared across all mods — every plugin that
+// returns a tree contributes a row. The engine uses ONLY the LAST tree
+// returned, replacing whatever earlier mods drew (per the Claude Code
+// plugin docs at code.claude.com/docs/<lang>/plugins/mods/interface).
+// To preserve what plugins after ours draw, the docs say: put
+// `await next(e)` as a child of a Box in OUR tree. So we await next(e),
+// then wrap the result + our band in a column.
+//
+// When we have no band to add (zero edits, or the Pane is currently
+// open), pass through next(e) alone so cc-context-mod (or whoever else
+// already drew) keeps their tree unmolested.
+//
+// Layout is plain — no `flexWrap`, no `flexGrow: 1`, no nested Boxes
+// beyond the outer column. An earlier build tried fancier layouts and
+// rendered inconsistently (sometimes occluding cc-context-mod).
+  on(
+    'ui.render',
+    { component: 'AbovePrompt' },
+    async ($, e, next) => {
+      type BoxEl = (props: Record<string, unknown> & { children?: unknown }) => unknown
+      const { Box } = $.ui.resolve(e) as { Box: BoxEl }
+      const ourBand = renderBand($, e as never)
+      if (ourBand === null) {
+        // No band of our own — yield via next(e) so the next plugin's
+        // tree (typically cc-context-mod) is preserved as-is.
+        return (await next(e)) as never
+      }
+      // We have a band to draw. Pull next(e) to keep the other plugin's
+      // tree, then compose ours below it in a column.
+      //
+      // `next(e)` may throw "no implementation for ui.render" if no other
+      // AbovePrompt handler is registered. Catch and treat as "no others".
+      let others: unknown = null
+      try {
+        others = await next(e)
+      } catch {
+        others = null
+      }
+      // Element-shaped = plain object with a string `type` field. Test
+      // stubs sometimes return engine internals; drop those.
+      const looksLikeElement =
+        others !== null &&
+        others !== undefined &&
+        typeof others === 'object' &&
+        typeof (others as { type?: unknown }).type === 'string'
+      if (!looksLikeElement) return ourBand as never
+      return Box({
+        flexDirection: 'column',
+        children: [others, ourBand],
+      }) as never
+    },
+  )
+
+  // Keep `paneOpen` in sync when the engine closes our Pane (Escape, X,
+  // or an engine-driven focus shift). The toggle call goes to /
+  // file-history, so X / Escape updating `paneOpen` immediately keeps the
+  // next /file-history from fighting itself. AbovePrompt has no engine close
+  // event, but the band never holds an open/closed flag of its own.
+  on('ui.close', ($, e, next) => {
+    if (e.id === PANE_ID) {
+      paneOpen = false
+      $.ui.invalidate('ui.render')
+    }
+    return next(e)
   })
 }

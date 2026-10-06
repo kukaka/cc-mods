@@ -1,34 +1,49 @@
 # cc-file-history-mod
 
 A Claude Code mod that captures every file Claude has edited this session
-and lets you revert any one of them. Single surface:
+and lets you revert any one of them. Two surfaces:
 
-- **Pane** (opened on demand by `/file-history`) — the full file-grouped
-  list with one `[Revert]` per edit. Has the engine's dark chrome (a
-  fixed engine choice, not plugin-controllable), so on a light terminal
-  it looks wrong; we open it explicitly only when the user actually
-  wants to look at the list or revert.
+- **AbovePrompt band** — auto-shown once the first edit lands. A single
+  row reading `▶ File history: N edits (M files)` with a `[ View ]` button
+  (hotkey `v`). Click or press `v` to open the Pane. The band hides while
+  the Pane is open, and hides entirely when there are no edits to show.
 
-Open and close it with the slash command:
+- **Pane** (opened on demand by the band's `[ View ]` button or
+  `/file-history`) — the full file-grouped list with one `[Revert]` per
+  edit. Has the engine's dark chrome (a fixed engine choice, not
+  plugin-controllable), so on a light terminal it looks wrong; we open
+  it explicitly only when the user actually wants to look at the full
+  list or revert.
+
+The slash command is a secondary surface — the band is the entry point:
 
 ```
 /file-history
 ```
 
 `/file-history` toggles the Pane: first call opens it, second closes.
-Closing via the engine's `[X]` / `Esc` also dismisses it; the next
-`/file-history` will figure out which way to flip from our local flag
-(and waste one round-trip if the flag went stale).
-
-The **first** successful `Edit` / `Write` of a session auto-opens the
-Pane — there's no other way for the user to know something happened.
-After the auto-open, the Pane is yours: `/file-history` toggles it,
-the engine's `[X]` / `Esc` closes it, and **a manual close sticks** —
-subsequent edits do not pop the Pane back up. `/clear` / `/resume` /
-`/fork` resets the edits list, so the next edit in the new session
-will auto-open again.
+Closing via the engine's `[X]` / `Esc` also dismisses it; the
+`on('ui.close', ...)` hook keeps our local flag in sync so the next
+`/file-history` always flips the right way. `/clear` / `/resume` /
+`/fork` resets the edits list and the band hides until the next one.
 
 ## What you see
+
+### Band
+
+```
+▶ File history: 4 edits (3 files)            [ View ]
+```
+
+- A single row above the prompt. Magenta text + a `[ View ]` button
+  (hotkey `v`).
+- Counts `N edits (M files)`; pluralises correctly (`1 edit`, `2 edits`).
+- Hidden while the Pane is open (it would just duplicate the chrome) and
+  when there are no edits to show.
+- Plain `Box({ flexDirection: 'row', gap: 2, paddingX: 1, children: [Text, Button] })`
+  shape — no `flexWrap`, no `flexGrow: 1` spacers, no nested Boxes. An
+  earlier build tried those and rendered inconsistently (sometimes
+  occluding cc-context-mod); the flat shape stays out of their way.
 
 ### Pane
 
@@ -67,10 +82,13 @@ will auto-open again.
 | --- | --- |
 | `session.start` | Reset history, register `/file-history`. |
 | `classic.SessionStart { clear \| resume \| fork }` | Same reset on `/clear`, `/resume`, `/branch`. |
-| `command.run { command: 'file-history' }` | Open / close the Pane via `$.ui.open` / `$.ui.close` with `PANE_ID`. |
+| `command.run { command: 'file-history' }` | Open / close the Pane via `$.ui.open` / `$.ui.close` with `PANE_ID`. Secondary surface — the band's `[ View ]` is the entry point. |
 | `tool.call { tool: 'Edit' }` | Snapshot `before` via `$.fs.read`, run the edit, snapshot `after`, record the row. |
 | `tool.call { tool: 'Write' }` | Same. If `$.fs.read` of the pre-write path rejects, set `beforeExists = false` so Revert falls back to `rm`. |
 | `tool.call { tool: 'Bash' }` | Record file deletions. Two paths to the deletion set: (a) `result.result.bashEditDiff.files[].deleted: true` (catches shell-internal deletes our parse can't see — `mv a /dev/null`, `find -delete`, globs the shell expanded), (b) `$.fs.stat` probe of every candidate we pre-read (the reliable path for plain `rm path` in this build — the engine doesn't populate `bashEditDiff` for `rm`). Pre-read candidate content (via `parseRmCandidates` + `$.fs.read`) is what makes Revert-able. |
+| `ui.render { component: 'AbovePrompt' }` | Render the band tree (`▶ File history: N edits (M files) [ View ]`). Yields `next(e)` when there are no edits or the Pane is open. |
+| `ui.render { component: 'Pane', requestId: PANE_ID }` | Render the file-grouped edit list with `[Show]/[Hide]` and `[Revert]` per row. |
+| `ui.close { id: PANE_ID }` | Keep `paneOpen` in sync when the engine closes the Pane (Escape, X). Without this, X / Escape would leave the flag stale and the next `/file-history` would fight itself. |
 | `ui.render { component: 'Pane', requestId: PANE_ID }` | Render the file-grouped edit list with `[Show]/[Hide]` and `[Revert]` per row. |
 
 A `Revert` is a Button `onPress` closure — each button captures its edit
@@ -146,20 +164,18 @@ For v1, configuration is module-local constants in `hooks/history.ts` /
   the full list or to revert; the engine's chrome is the price of
   having multiple Buttons and a `[Revert]` confirmation dialog.
 - **`paneOpen` flag can lag** — if you close the Pane via the engine's
-  `[X]` or `Esc`, our local `paneOpen` is unaware until the next
-  `/file-history`, at which point the toggle flips the wrong way once
-  before catching up. Both `$.ui.open` and `$.ui.close` are safe to
-  call against a missing/already-placed Pane, so the cost is one
-  round-trip.
-- **Auto-open requires ≥ 110 columns OR a prior manual `/file-history`** —
-  on narrow terminals (< 110 cols), the engine only places a Pane if the
-  user has explicitly opened it before. A plugin-initiated `$.ui.open`
-  from `recordTool` counts as "unasked" and the engine returns
-  `isPlaced: false` with reason `below 110 columns`. The first edit will
-  still be captured (so subsequent `/file-history` will show it), but
-  the Pane won't pop up automatically until you `/file-history` once
-  yourself (or widen the terminal to ≥ 110 cols so it docks
-  unconditionally). The toast on auto-open failure makes this explicit.
+  `[X]` or `Esc`, our `on('ui.close', ...)` hook flips `paneOpen` to
+  false immediately, so the next `/file-history` opens rather than
+  fighting the engine. Both `$.ui.open` and `$.ui.close` are safe to
+  call against a missing/already-placed Pane.
+- **Opening the Pane on narrow terminals (< 110 cols)** — when the user
+  clicks `[ View ]` or runs `/file-history` on a narrow terminal, the
+  engine returns `isPlaced: false` with reason `below 110 columns`. The
+  band stays visible and tells them so via a 6-second toast. We don't
+  try to draw the file-grouped list inside the band on narrow terminals
+  — too cramped for `[Revert]` Buttons. Widen the terminal (or dock the
+  terminal fullscreen so the band docks a Pane) and the next click /
+  `/file-history` will place the Pane.
 
 ## Develop
 
