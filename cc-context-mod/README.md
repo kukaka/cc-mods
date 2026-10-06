@@ -100,14 +100,13 @@ Error states, all visible in the band:
 
 ### Layout at narrow terminals
 
-Each "section" is its own Box; the outer Box has `flexWrap: 'wrap'` so a section that doesn't fit moves cleanly to the next line. Thresholds:
+Each "section" is its own Box; the outer Box has `flexWrap: 'wrap'` so a section that doesn't fit moves cleanly to the next line. The chart + trend show as soon as a real reading exists, regardless of width; M Plan's reset times are the only width-gated piece. Thresholds:
 
-| Width  | What's shown                                              |
-|--------|-----------------------------------------------------------|
-| ≥ 100  | forecast + chart + trend + M Plan with reset times         |
-| ≥ 90   | forecast + M Plan with reset times (no chart)              |
-| ≥ 55   | forecast + M Plan (no reset times, no chart)               |
-| < 55   | forecast only                                             |
+| Width | What's shown                                              |
+|-------|-----------------------------------------------------------|
+| ≥ 90  | forecast + chart + trend + M Plan with reset times         |
+| ≥ 55  | forecast + chart + trend + M Plan (no reset times)         |
+| < 55  | forecast + chart + trend                                   |
 
 ---
 
