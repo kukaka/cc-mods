@@ -1,7 +1,7 @@
 {
   "name": "cc-file-history-mod",
-  "version": "0.1.0",
-  "description": "AbovePrompt band + Pane that together capture every file Claude has edited this session and let you revert any one of them. Toggle the band with /file-history; open the Pane from the band's [View] button.",
+  "version": "0.2.0",
+  "description": "AbovePrompt band (auto-shows the edit count) + Pane (file-grouped list with [Revert]). Click the band's [View] (or /file-history) to open the Pane and revert.",
   "author": {
     "name": "lixinghui"
   },

@@ -400,8 +400,9 @@ function band(Box, Text, columns) {
   const ctx = hasData ? forecastFor(now.percent) : null;
   const trend = hasData ? trendWord() : "";
 
-  // Width-based layout decisions.
-  const showChart = columns >= 100;
+  // Width-based layout decisions. The chart is always shown once we have
+  // real data — the user asked for it visible regardless of terminal width.
+  const showChart = hasData;
   const showResets = columns >= 90;
   const showMPlan = columns >= 55;
 

@@ -91,6 +91,56 @@ Since `claude plugin list` reports the mod as `Read from: .../cc-mods/<mod-name>
 
 If the engine refuses to draw what your `ui.render` hook returned, the transcript says so in a dim line, with the reason. With `claude --debug` the same line plus the full error go to the debug log. With a test file (`<mod-name>/hooks/*.test.ts`), `claude plugin test ./<mod-name>` runs each test as the engine does, on each surface.
 
+## Recipes
+
+### Multiple mods sharing `AbovePrompt`
+
+`AbovePrompt` is the single band directly above the prompt input. Every
+mod's `on('ui.render', { component: 'AbovePrompt' }, ...)` handler
+contributes a row, but the engine picks the **last-returned** tree —
+whatever your handler returns *replaces* whatever earlier mods drew. If
+your mod is registered before `cc-context-mod`, `cc-context-mod`'s band
+will be replaced by yours (and vice versa). To render **both** bands at
+the same time, the engine docs (`code.claude.com/docs/<lang>/plugins/mods/interface`)
+say:
+
+> The tree replaces what mods after yours draw. To preserve their output,
+> place the result of `await next(e)` among the children of a Box in
+> your tree.
+
+In `cc-file-history-mod` the handler does exactly this:
+
+```ts
+on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+  const { Box } = $.ui.resolve(e)
+  const ourBand = renderBand($, e)
+  if (ourBand === null) return await next(e)            // nothing to add; yield
+  let others: unknown = null
+  try { others = await next(e) } catch { others = null }  // engine throws if alone
+  const looksLikeElement =
+    others && typeof others === 'object' && typeof (others as any).type === 'string'
+  if (!looksLikeElement) return ourBand                  // no other band; just ours
+  return Box({                                          // compose both in a column
+    flexDirection: 'column',
+    children: [others, ourBand],
+  })
+})
+```
+
+Live with both `cc-context-mod` and `cc-file-history-mod` loaded:
+`cc-context-mod`'s band sits on top, `▶ File history: N edits …` sits
+below it; both visible together after every Edit.
+
+Layout rules that bit earlier builds — keep the band's own row plain
+(no `flexWrap`, no `flexGrow: 1` spacers, no nested Boxes inside the
+row itself). Reach for `flexWrap` only after you have more than one
+Text child per row to fit, and only after testing with `cc-context-mod`
+loaded.
+
+If your mod doesn't need its own row (e.g. only context-mod-style
+display), just return `await next(e)` from the AbovePrompt handler and
+let the next plugin in the chain handle everything.
+
 ## Publishing
 
 To share this marketplace with another computer:
