@@ -424,6 +424,164 @@ test('AbovePrompt band is hidden when the Pane is open', async ($, on) => {
   expect(hasOurRow).toBe(false)
 })
 
+test('AbovePrompt coexists with row-with-wrap plugin (non-WT)', async ($, on) => {
+  // Commit 4792958 unconditionally wrapped `others` in a column Box to
+  // work around a Windows Terminal bug where cc-context-mod's row-with-wrap
+  // AbovePrompt tree pushed our band off-screen. The same column-shape
+  // first child then regressed every non-WT renderer (the new wrap itself
+  // fills vertical room, off-screen on the OTHER side). The fix branches
+  // on `isWindowsTerminal`, cached from a `WT_SESSION` probe in
+  // session.start.
+  //
+  // This test pins the non-WT path. The default AbovePrompt stub mimics
+  // cc-context-mod's actual row-with-wrap shape — the original 4792958 test
+  // stubbed an empty Box, which never exercised either branch.
+  on('session.start', () => ({ cwd: '/work' }))
+  on('command.register', () => ({ value: undefined }))
+  // `$.env.get('WT_SESSION')` is not stubbed — returns undefined → cached
+  // as non-Windows Terminal.
+  on('ui.render', ($, e: { component: string }, next) => next(e))
+  on('fs.stat', ($, e: { path: string }) => ({
+    value: { realPath: e.path },
+  }))
+  on(
+    'tool.call',
+    { tool: 'Edit' },
+    () => ({ result: { ok: true } } as never),
+  )
+  on('ui.open', () => ({ value: { isPlaced: false } } as never))
+  on('ui.close', () => ({ value: undefined } as never))
+  on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+    const { Box, Text } = $.ui.resolve(e as never)
+    return Box({
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      children: [Text({ children: 'context-band' })],
+    }) as never
+  })
+
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await $.tool.call({
+    tool: 'Edit',
+    tool_use_id: 't1',
+    file_path: '/work/a.ts',
+    old_string: 'x',
+    new_string: 'y',
+  })
+
+  const tree = (await $.ui.render({
+    surface: 'terminal',
+    component: 'AbovePrompt',
+    props: {
+      hasSurvey: false,
+      isWorking: false,
+      maxRows: 20,
+      bodyColumns: 80,
+      scroll: { offset: 0, bodyRows: 20 },
+      view: {},
+    },
+  })) as {
+    props?: { flexDirection?: string }
+    children?: unknown[]
+  }
+  // Outer shape: column with two children.
+  expect(tree?.props?.flexDirection).toBe('column')
+  expect(tree?.children?.length).toBe(2)
+  // First child = the row-with-wrap others directly (NO inner isolation Box).
+  const firstA = tree?.children?.[0] as {
+    props?: { flexDirection?: string; flexWrap?: string }
+    children?: unknown[]
+  }
+  expect(firstA?.props?.flexDirection).toBe('row')
+  expect(firstA?.props?.flexWrap).toBe('wrap')
+  expect(firstA?.children?.length).toBe(1)
+  // Second child = our band's row (the original shape from before 4792958).
+  const ourBandA = tree?.children?.[1] as {
+    props?: { flexDirection?: string; gap?: number }
+    children?: unknown[]
+  }
+  expect(ourBandA?.props?.flexDirection).toBe('row')
+  expect(ourBandA?.props?.gap).toBe(2)
+})
+
+test('AbovePrompt coexists with row-with-wrap plugin (WT)', async ($, on) => {
+  // The WT path: keep the 4792958 column-wrap-around-others workaround,
+  // because putting a row-with-wrap directly as the first child of a column
+  // template makes WT push our band off-screen. A column-shape first child
+  // is safe in WT.
+  on('session.start', () => ({ cwd: '/work' }))
+  on('command.register', () => ({ value: undefined }))
+  // Stub env.get to report Windows Terminal.
+  on('env.get', { name: 'WT_SESSION' }, () => ({
+    value: '00000000-0000-0000-0000-000000000000',
+  }))
+  on('ui.render', ($, e: { component: string }, next) => next(e))
+  on('fs.stat', ($, e: { path: string }) => ({
+    value: { realPath: e.path },
+  }))
+  on(
+    'tool.call',
+    { tool: 'Edit' },
+    () => ({ result: { ok: true } } as never),
+  )
+  on('ui.open', () => ({ value: { isPlaced: false } } as never))
+  on('ui.close', () => ({ value: undefined } as never))
+  on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+    const { Box, Text } = $.ui.resolve(e as never)
+    return Box({
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      children: [Text({ children: 'context-band' })],
+    }) as never
+  })
+
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await $.tool.call({
+    tool: 'Edit',
+    tool_use_id: 't1',
+    file_path: '/work/a.ts',
+    old_string: 'x',
+    new_string: 'y',
+  })
+
+  const tree = (await $.ui.render({
+    surface: 'terminal',
+    component: 'AbovePrompt',
+    props: {
+      hasSurvey: false,
+      isWorking: false,
+      maxRows: 20,
+      bodyColumns: 80,
+      scroll: { offset: 0, bodyRows: 20 },
+      view: {},
+    },
+  })) as {
+    props?: { flexDirection?: string }
+    children?: unknown[]
+  }
+  // Outer shape: column with two children (wrap + band).
+  expect(tree?.props?.flexDirection).toBe('column')
+  expect(tree?.children?.length).toBe(2)
+  // First child = an isolation Box (column-shape) wrapping the row-with-wrap.
+  const isoBox = tree?.children?.[0] as {
+    props?: { flexDirection?: string }
+    children?: unknown[]
+  }
+  expect(isoBox?.props?.flexDirection).toBe('column')
+  expect(isoBox?.children?.length).toBe(1)
+  const innerRow = isoBox?.children?.[0] as {
+    props?: { flexDirection?: string; flexWrap?: string }
+  }
+  expect(innerRow?.props?.flexDirection).toBe('row')
+  expect(innerRow?.props?.flexWrap).toBe('wrap')
+  // Second child = our band's row.
+  const ourBandB = tree?.children?.[1] as {
+    props?: { flexDirection?: string; gap?: number }
+  }
+  expect(ourBandB?.props?.flexDirection).toBe('row')
+  expect(ourBandB?.props?.gap).toBe(2)
+})
+
 test('Bash `rm path` records a delete with content from the parse step', async ($, on) => {
   // The flow: Bash is invoked with `rm path`. We capture the content via
   // fs.read in the parse step. The test stub for tool.call returns the

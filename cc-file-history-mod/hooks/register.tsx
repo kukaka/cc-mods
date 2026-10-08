@@ -51,6 +51,30 @@ const diffCache = new Map<number, string | null>()
 // Pane id must be 1-64 of letters, digits, `_` or `-` (host check).
 const PANE_ID = 'cc-file-history-mod-pane'
 
+// Cached Windows Terminal probe. `WT_SESSION` is set by Windows Terminal
+// and unset on every other terminal we test on (macOS Terminal, iTerm,
+// ConEmu, mintty, etc.). The AbovePrompt coexistence handler branches on
+// this — only WT needs the column-wrap-around-`others` workaround; on
+// every other terminal, a column-shaped first child of the column
+// container stretches to fill available vertical room on its own,
+// pushing the band off-screen (the same renderer bug, just with a
+// column trigger instead of a row-with-wrap trigger).
+let isWindowsTerminal: boolean | null = null
+
+async function probeWindowsTerminal($: EngineInterface): Promise<boolean> {
+  if (isWindowsTerminal !== null) return isWindowsTerminal
+  try {
+    // $.env.get requires a string literal — see cc-context-mod's use of
+    // "ANTHROPIC_API_KEY" / "MINIMAX_SUBSCRIPTION_KEY" for the pattern.
+    // Returns `undefined` (not throw) when the var is unset, so a truthy
+    // check is correct.
+    isWindowsTerminal = Boolean(await $.env.get('WT_SESSION'))
+  } catch {
+    isWindowsTerminal = false
+  }
+  return isWindowsTerminal
+}
+
 function resetState() {
   edits = []
   nextId = 1
@@ -613,23 +637,35 @@ function renderPane($: EngineInterface, e: PaneRenderEvent) {
 
   // Header — 📂 folder icon + title + counts + flexGrow spacer + Close button.
   //
+  // Theme-adaptive text. The Pane chrome used to be a fixed dark fill
+  // (engine-controlled) so `color: 'white'` was the safe pick across
+  // terminal themes — but newer engines theme the chrome to match the
+  // terminal, making pinned white invisible on light mode. We now:
+  //   * Pin a bright accent (`color: 'magenta'`, `bold: true`) for the
+  //     title — bright magenta stays high-contrast on both chrome
+  //     variants, and matches the band's accent for visual consistency.
+  //   * Use `dimColor: true` (no `color`) for secondary text. `dimColor`
+  //     renders a dimmed version of the engine's default text colour,
+  //     which the engine adapts to the terminal theme — same trick
+  //     cc-context-mod uses for its non-accent text in the AbovePrompt
+  //     band, where it stays readable on both backgrounds.
+  //
   // Button colour note: ButtonProps doesn't expose `color` (only
   // dimColor / variant / plain / hover); `color: 'white'` is silently
   // dropped. The escape is `variant: 'primary'`, which paints the label
   // in the engine's accent colour — bright in both light and dark
-  // terminals, so it always contrasts with the dark Pane chrome. We
-  // mark every Button primary; Close / Show / Revert are the only
-  // pressable leaves on each surface. The status-char accents (red /
-  // yellow / green) already sit on the bright side of the palette and
-  // need no override.
+  // terminals, so it always contrasts with the chrome. We mark every
+  // Button primary; Close / Show / Revert are the only pressable leaves
+  // on each surface. The status-char accents (red / yellow / green)
+  // already sit on the bright side of the palette and need no override.
   const header = Box({
     flexDirection: 'row',
     gap: 1,
     children: [
       Text({ children: '📂' }),
-      Text({ bold: true, color: 'white', children: 'File history' }),
+      Text({ bold: true, color: 'magenta', children: 'File history' }),
       Text({
-        color: 'white',
+        dimColor: true,
         children: `${totalFiles} file${totalFiles === 1 ? '' : 's'}, ${totalEdits} edit${totalEdits === 1 ? '' : 's'}`,
       }),
       Box({ flexGrow: 1 }),
@@ -644,7 +680,7 @@ function renderPane($: EngineInterface, e: PaneRenderEvent) {
       gap: 1,
       children: [
         header,
-        Text({ color: 'white', children: 'no edits captured yet' }),
+        Text({ dimColor: true, children: 'no edits captured yet' }),
       ],
     })
   }
@@ -690,12 +726,11 @@ const kindLabel = (rec: EditRecord): string => {
         Text({ children: fileEmoji(g.filePath) }),
         Text({
           bold: true,
-          color: isDeleted ? 'gray' : 'white',
-          strikethrough: isDeleted,
+          ...(isDeleted ? { color: 'gray', strikethrough: true } : {}),
           children: fileBase,
         }),
         ...(parent
-          ? [Text({ dimColor: true, color: 'white', children: parent })]
+          ? [Text({ dimColor: true, children: parent })]
           : []),
         Box({ flexGrow: 1 }),
         Text({ color: fileStatus.color, bold: true, children: fileStatus.char }),
@@ -720,14 +755,14 @@ const kindLabel = (rec: EditRecord): string => {
       const rowChildren: unknown[] = []
 
       rowChildren.push(Text({ color: status.color, children: status.char }))
-      rowChildren.push(Text({ color: 'white', children: relativeTime(rec.ts) }))
-      rowChildren.push(Text({ color: 'white', children: kindLabel(rec) }))
+      rowChildren.push(Text({ dimColor: true, children: relativeTime(rec.ts) }))
+      rowChildren.push(Text({ dimColor: true, children: kindLabel(rec) }))
 
       if (rec.beforeExists && typeof rec.before === 'string') {
         const lines = rec.before.split('\n').length
         rowChildren.push(
           Text({
-            color: 'white',
+            dimColor: true,
             children: `(${lines} line${lines === 1 ? '' : 's'} before)`,
           }),
         )
@@ -759,11 +794,11 @@ const kindLabel = (rec: EditRecord): string => {
       } else if (rec.beforeExists && typeof rec.before === 'string') {
         // Have before but no after — the file read after `next(e)` failed.
         // Surface it explicitly so the user knows why the toggle is missing.
-        rowChildren.push(Text({ color: 'white', children: '(no diff: after missing)' }))
+        rowChildren.push(Text({ dimColor: true, children: '(no diff: after missing)' }))
       } else if (rec.kind === 'edit') {
         // Edit without a hunk shouldn't happen (input always carries it), but
         // be defensive — no message to avoid a misleading "missing".
-        rowChildren.push(Text({ color: 'white', children: '(no diff)' }))
+        rowChildren.push(Text({ dimColor: true, children: '(no diff)' }))
       }
 
       if (rec.applied) {
@@ -771,7 +806,7 @@ const kindLabel = (rec: EditRecord): string => {
           Button({ key: `revert-${rec.id}`, label: 'Revert', variant: 'primary', onPress: revert }),
         )
       } else {
-        rowChildren.push(Text({ color: 'white', children: '(failed)' }))
+        rowChildren.push(Text({ dimColor: true, children: '(failed)' }))
       }
 
       const mainRow = Box({ flexDirection: 'row', gap: 1, children: rowChildren })
@@ -784,11 +819,11 @@ const kindLabel = (rec: EditRecord): string => {
       const diffText = diffCache.get(rec.id)
       const diffBody: unknown[] = []
       if (diffText === undefined) {
-        diffBody.push(Text({ color: 'white', children: 'computing diff…' }))
+        diffBody.push(Text({ dimColor: true, children: 'computing diff…' }))
       } else if (diffText === null) {
-        diffBody.push(Text({ color: 'white', children: 'diff unavailable' }))
+        diffBody.push(Text({ dimColor: true, children: 'diff unavailable' }))
       } else if (diffText === '') {
-        diffBody.push(Text({ color: 'white', children: '(no textual change)' }))
+        diffBody.push(Text({ dimColor: true, children: '(no textual change)' }))
       } else {
         // Code truncates at 10000 chars; we slice to the start so a giant
         // diff still draws something. The end-of-input marker tells the
@@ -933,6 +968,8 @@ function renderBand(
 export const register: Register = (on) => {
   on('session.start', async ($, e, next) => {
     resetState()
+    // Eagerly probe Windows Terminal so the render hot path stays sync.
+    await probeWindowsTerminal($)
     await $.command.register({
       name: 'file-history',
       description: 'Open / close the file-edit history pane',
@@ -1051,24 +1088,21 @@ export const register: Register = (on) => {
         typeof others === 'object' &&
         typeof (others as { type?: unknown }).type === 'string'
       if (!looksLikeElement) return ourBand as never
-      return Box({
-        flexDirection: 'column',
-        children: [
-          // Wrap `others` in an explicit column Box. cc-context-mod's tree
-          // is itself a row-with-wrap (outer Box has `flexDirection: 'row',
-          // `flexWrap: 'wrap'`, with three inner row Boxes as sections). On
-          // Windows Terminal, putting that row-with-wrap directly as the
-          // first child of a column container makes the renderer treat the
-          // first child as filling all available vertical room — `ourBand`
-          // gets pushed off-screen and only cc-context-mod's band stays.
-          // Wrapping `others` in a column-shaped Box isolates cc-context-mod's
-          // wrap behaviour from the column's own layout. macOS renders both
-          // bands correctly with or without the wrapper, so this is a no-op
-          // there.
-          Box({ flexDirection: 'column', children: [others] }),
-          ourBand,
-        ],
-      }) as never
+      // Coexistence with another AbovePrompt mod (typically cc-context-mod):
+      // compose `others` (their tree) and `ourBand` into a column. Two shapes:
+      //   * WT (cached in session.start): `others` is row-with-wrap — a
+      //     column-shape child of a column container would be safe, but a
+      //     row-with-wrap one is not; wrap it in an inner column Box to
+      //     isolate the wrap behavior.
+      //   * everything else (macOS, iTerm, ConEmu, mintty): a column-shape
+      //     first child of a column container fills vertical room — direct
+      //     nesting is the only shape that works. (The commit message of
+      //     4792958 claimed "macOS is unaffected", which the renderer now
+      //     proves wrong.)
+      const children = isWindowsTerminal
+        ? [Box({ flexDirection: 'column', children: [others] }), ourBand]
+        : [others, ourBand]
+      return Box({ flexDirection: 'column', children }) as never
     },
   )
 
