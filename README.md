@@ -38,6 +38,53 @@ claude plugin uninstall cc-context-mod@cc-mods
 claude plugin marketplace remove cc-mods
 ```
 
+## Alternative install: in-place via `CLAUDE_CODE_PLUGIN_DIRS`
+
+The marketplace install path runs every mod through the engine's
+"marketplace-installed" loading path. For mods that draw UI
+(AbovePrompt band, Pane, status line, toast) that path can fail to
+draw on some engine versions — the mod's `ui.render` handler runs,
+but the engine ignores the return value, so only the engine's own
+defaults appear above the prompt. `cc-file-history-mod` hits this
+on every observed install.
+
+The fix is to load the mod the same way `claude --plugin-dir` does —
+**in place from the source directory** — but persistently, every
+session. Set `CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json`
+(user scope) or the project's `.claude/settings.json` (project
+scope):
+
+```jsonc
+{
+  "env": {
+    "CLAUDE_CODE_PLUGIN_DIRS": "C:\\Users\\kukak\\Documents\\project\\cc-mods\\cc-file-history-mod;C:\\Users\\kukak\\Documents\\project\\cc-mods\\cc-context-mod;C:\\Users\\kukak\\Documents\\project\\cc-mods\\cc-code-format-mod"
+  }
+}
+```
+
+Rules:
+
+- Paths are **absolute**; relative paths do not resolve.
+- Separator is **`;` on Windows**, **`:` on macOS / Linux** (same as
+  `PATH`).
+- Each entry must be a mod's root directory (the one containing
+  `.claude-plugin/plugin.json`), or a folder of mods.
+- Precedence: a `CLAUDE_CODE_PLUGIN_DIRS` plugin **replaces** a
+  same-named marketplace-installed plugin, so the two can coexist
+  without double-loading. You can leave `claude plugin install`
+  entries in `enabledPlugins` and they will be ignored while the env
+  var is set.
+- `CLAUDE_CODE_PLUGIN_DIRS` is an env var, so `/reload-plugins` does
+  **not** re-read it. **Quit and relaunch Claude Code** after editing
+  `settings.json`. Source edits inside any listed mod hot-reload on
+  the next turn, same as a marketplace install — you only need to
+  restart when the env var itself changes.
+
+This is the recommended install path for every mod in this repo,
+especially when you are actively editing them: same in-place loading
+as `--plugin-dir`, persistent across sessions, no
+`claude plugin install` round-trip on every change.
+
 ## Using a mod
 
 After install, just start Claude Code. The mod hooks in automatically — no command to type, no button to press. See each mod's README for what to expect and how to configure it.
