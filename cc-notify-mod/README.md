@@ -158,6 +158,35 @@ The mod still loads on Linux/Windows: hooks register, the foreground-probe retur
 - **No quiet hours yet.** No way to silence during specific windows.
 - **AskUserQuestion probe may fire on dialog opens that don't actually need an answer.** The hook triggers when the dialog renders; if you dismiss it instantly, the notification is still sent.
 
+## Troubleshooting
+
+### `osascript` notifications silently dropped on a fresh macOS Sequoia (15.x) install
+
+**Symptom.** `osascript -e 'display notification "x" with title "x"'` returns `exit 0` but no banner appears and no entry shows up in **System Settings → Notifications**. After applying the fix below, notifications work as expected.
+
+**Quick check.** Run this and look at the `flags` field of the `com.apple.ScriptEditor2` entry:
+
+```bash
+defaults read com.apple.ncprefs | grep -A 6 'ScriptEditor2'
+```
+
+A stuck fresh install shows `flags = 8206`; a working install has a different value. The `usernoted` daemon will also log:
+
+```
+usernoted: com.apple.ScriptEditor2 needs a valid url to ask permissions, none found
+usernoted: Presenting <NotificationRecord app:"com.apple.ScriptEditor2" ...> as none
+```
+
+**Fix.** Open **Script Editor.app** (at `/System/Applications/Utilities/Script Editor.app`) and run the same `display notification` line from inside it:
+
+```text
+display notification "test" with title "test" sound name "Glass"
+```
+
+macOS will surface the permission prompt it refused to surface when called from the bare `osascript` binary. Click **Allow**, then quit Script Editor. From that point on, every `osascript` notification (including this mod's) works as expected.
+
+**Why.** `osascript` is hard-wired (via its `notificationcenter-identifiers` entitlement) to attribute its notifications to bundle id `com.apple.ScriptEditor2`. On a fresh Sequoia install, that bundle's ncprefs record lands in a state where `usernoted` accepts the notification but presents it as "none" and the system refuses to surface the app in **System Settings → Notifications** — leaving you no UI to change it. Running the same line from Script Editor.app itself takes a code path macOS trusts, so it can prompt for the permission and rewrite the `flags` field. Because `osascript` shares that bundle id, all subsequent osascript notifications work too.
+
 ---
 
 ## Inspiration
