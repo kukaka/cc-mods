@@ -5,7 +5,7 @@
 
 
 def main() -> None:
-    print("hello world")
+    print("hello, themeable world")
 
 
 if __name__ == "__main__":
