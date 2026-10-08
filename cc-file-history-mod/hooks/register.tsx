@@ -991,7 +991,21 @@ export const register: Register = (on) => {
       if (!looksLikeElement) return ourBand as never
       return Box({
         flexDirection: 'column',
-        children: [others, ourBand],
+        children: [
+          // Wrap `others` in an explicit column Box. cc-context-mod's tree
+          // is itself a row-with-wrap (outer Box has `flexDirection: 'row',
+          // `flexWrap: 'wrap'`, with three inner row Boxes as sections). On
+          // Windows Terminal, putting that row-with-wrap directly as the
+          // first child of a column container makes the renderer treat the
+          // first child as filling all available vertical room — `ourBand`
+          // gets pushed off-screen and only cc-context-mod's band stays.
+          // Wrapping `others` in a column-shaped Box isolates cc-context-mod's
+          // wrap behaviour from the column's own layout. macOS renders both
+          // bands correctly with or without the wrapper, so this is a no-op
+          // there.
+          Box({ flexDirection: 'column', children: [others] }),
+          ourBand,
+        ],
       }) as never
     },
   )
