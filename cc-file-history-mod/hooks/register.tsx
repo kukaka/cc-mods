@@ -29,6 +29,8 @@ import {
   cap,
   formatTime,
   groupByFile,
+  parentPath,
+  relativeTime,
   type EditKind,
   type EditRecord,
 } from './history'
@@ -540,11 +542,55 @@ async function revertById($: EngineInterface, id: number) {
 
 // ---------------------------------------------------------------------------
 // Pane render (the full list with per-edit Revert buttons and per-row diff).
+//
+// Layout aims to mirror VSCode's Source Control view: each file is a
+// VSCode-style row (icon + basename + dim parent path + right-aligned status
+// character), with the per-edit rows indented under it. No empty rows
+// between elements — gap: 0 over the file group, gap: 0 between groups, so
+// the eye scans a tight list. The header still carries the [Close] button
+// (engine-controlled Pane chrome anchors it; `pane.children[0]` is the
+// header row, asserted by tests/register.test.ts).
 // ---------------------------------------------------------------------------
 
 type PaneRenderEvent = {
   surface: string
   props?: { bodyColumns?: number }
+}
+
+// VSCode-style icon picker — based on the file extension. Falls back to 📄
+// for anything not matched. Modern terminals (Windows Terminal, macOS
+// Terminal, iTerm2, GNOME Terminal) all render these emoji by default; if a
+// user's terminal lacks an emoji font the glyphs may show as ? boxes, but the
+// row layout stays intact.
+const fileEmoji = (path: string): string => {
+  const base = basename(path).toLowerCase()
+  if (base === 'package.json' || base === 'pyproject.toml') return '📦'
+  if (base.endsWith('.lock') || base.endsWith('.lockb')) return '🔒'
+  const ext = (base.split('.').pop() ?? '').toLowerCase()
+  switch (ext) {
+    case 'py': return '🐍'
+    case 'ts': return '🅣'
+    case 'tsx': return '🅴'
+    case 'js':
+    case 'jsx':
+    case 'mjs':
+    case 'cjs': return '🅙'
+    case 'json': return '{}'
+    case 'toml':
+    case 'yaml':
+    case 'yml': return '⚙'
+    case 'md':
+    case 'mdx': return '📋'
+    case 'css':
+    case 'scss':
+    case 'less': return '🎨'
+    case 'html':
+    case 'htm': return '🌐'
+    case 'sh':
+    case 'bash':
+    case 'zsh': return '🐚'
+    default: return '📄'
+  }
 }
 
 function renderPane($: EngineInterface, e: PaneRenderEvent) {
@@ -565,27 +611,22 @@ function renderPane($: EngineInterface, e: PaneRenderEvent) {
     await $.ui.close({ id: PANE_ID })
   }
 
+  // Header — 📂 folder icon + title + counts + flexGrow spacer + Close button.
+  //
+  // Button colour note: ButtonProps doesn't expose `color` (only
+  // dimColor / variant / plain / hover); `color: 'white'` is silently
+  // dropped. The escape is `variant: 'primary'`, which paints the label
+  // in the engine's accent colour — bright in both light and dark
+  // terminals, so it always contrasts with the dark Pane chrome. We
+  // mark every Button primary; Close / Show / Revert are the only
+  // pressable leaves on each surface. The status-char accents (red /
+  // yellow / green) already sit on the bright side of the palette and
+  // need no override.
   const header = Box({
     flexDirection: 'row',
     gap: 1,
     children: [
-      // The engine renders Pane chrome in a fixed dark fill in both light
-      // and dark terminal modes, but the default Text colour (and the
-      // Button label colour) adapts to the terminal — in a light terminal
-      // it's dark, on top of the dark chrome that becomes near-invisible.
-      //
-      // For Text we can pin `color: 'white'` directly. For Button the
-      // props don't include `color` (ButtonProps at index.d.ts:1000 only
-      // exposes `dimColor`, `variant`, `plain`, `hover`), so `color:
-      // 'white'` is silently dropped — that's why the buttons stay
-      // invisible after a `color: 'white'` edit. The Button-level escape
-      // is `variant: 'primary'`, which makes the terminal render the
-      // label in the engine's accent colour (bright in both terminal
-      // modes, so it always contrasts with the dark Pane chrome). We
-      // mark every Button primary; Close / Show / Revert are the only
-      // pressable leaves on each surface, so "the one to press" reads
-      // honestly. The status-char accents (red / yellow / green) already
-      // sit on the bright side of the palette and need no override.
+      Text({ children: '📂' }),
       Text({ bold: true, color: 'white', children: 'File history' }),
       Text({
         color: 'white',
@@ -631,15 +672,33 @@ const kindLabel = (rec: EditRecord): string => {
   }
 
   const groupBoxes = groups.map((g) => {
-    const fileHeader = Box({
+    // Most-recent record drives the file-row status. groupByFile sorts
+    // records newest-first, so `g.records[0]` is the latest. When the
+    // latest is a delete, the file itself is gone — strikethrough the
+    // filename so the file row reads as "deleted" without resorting to
+    // a separate icon.
+    const latest = g.records[0]!
+    const fileStatus = statusChar(latest)
+    const isDeleted = latest.kind === 'delete'
+    const fileBase = basename(g.filePath)
+    const parent = parentPath(g.filePath)
+
+    const fileRow = Box({
       flexDirection: 'row',
       gap: 1,
       children: [
-        Text({ bold: true, color: 'white', children: g.filePath }),
+        Text({ children: fileEmoji(g.filePath) }),
         Text({
-          color: 'white',
-          children: `${g.records.length} edit${g.records.length === 1 ? '' : 's'}`,
+          bold: true,
+          color: isDeleted ? 'gray' : 'white',
+          strikethrough: isDeleted,
+          children: fileBase,
         }),
+        ...(parent
+          ? [Text({ dimColor: true, color: 'white', children: parent })]
+          : []),
+        Box({ flexGrow: 1 }),
+        Text({ color: fileStatus.color, bold: true, children: fileStatus.char }),
       ],
     })
 
@@ -661,7 +720,7 @@ const kindLabel = (rec: EditRecord): string => {
       const rowChildren: unknown[] = []
 
       rowChildren.push(Text({ color: status.color, children: status.char }))
-      rowChildren.push(Text({ color: 'white', children: formatTime(rec.ts) }))
+      rowChildren.push(Text({ color: 'white', children: relativeTime(rec.ts) }))
       rowChildren.push(Text({ color: 'white', children: kindLabel(rec) }))
 
       if (rec.beforeExists && typeof rec.before === 'string') {
@@ -754,17 +813,20 @@ const kindLabel = (rec: EditRecord): string => {
       })
     })
 
+    // VSCode-style: no empty row between file row and its edit rows. Each
+    // edit row carries paddingLeft: 2 to indent under the filename.
     return Box({
       flexDirection: 'column',
-      gap: 1,
-      children: [fileHeader, ...recordRows],
+      gap: 0,
+      children: [fileRow, ...recordRows],
     })
   })
 
+  // No gap between groups either — matches VSCode's flat file list.
   return Box({
     flexDirection: 'column',
     paddingX: 1,
-    gap: 1,
+    gap: 0,
     children: [header, ...groupBoxes],
   })
 }
@@ -991,7 +1053,21 @@ export const register: Register = (on) => {
       if (!looksLikeElement) return ourBand as never
       return Box({
         flexDirection: 'column',
-        children: [others, ourBand],
+        children: [
+          // Wrap `others` in an explicit column Box. cc-context-mod's tree
+          // is itself a row-with-wrap (outer Box has `flexDirection: 'row',
+          // `flexWrap: 'wrap'`, with three inner row Boxes as sections). On
+          // Windows Terminal, putting that row-with-wrap directly as the
+          // first child of a column container makes the renderer treat the
+          // first child as filling all available vertical room — `ourBand`
+          // gets pushed off-screen and only cc-context-mod's band stays.
+          // Wrapping `others` in a column-shaped Box isolates cc-context-mod's
+          // wrap behaviour from the column's own layout. macOS renders both
+          // bands correctly with or without the wrapper, so this is a no-op
+          // there.
+          Box({ flexDirection: 'column', children: [others] }),
+          ourBand,
+        ],
       }) as never
     },
   )
