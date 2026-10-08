@@ -13,11 +13,11 @@ cc-mods/
 
 ## Mods
 
-| Mod                                          | What it does                                                                                                                                                           |
-| -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`cc-context-mod`](./cc-context-mod)         | One-line dashboard above the prompt: context window weather (left) + MiniMax M Plan / Token Plan balance (right).                                                      |
-| [`cc-code-format-mod`](./cc-code-format-mod) | Reformats every fenced code block in an LLM response to the language's standard style (Prettier, black, gofmt, rustfmt, shfmt) before the row lands in the transcript. |
-| [`cc-notify-mod`](./cc-notify-mod)           | Forwards `turn.complete` / repeated `Bash` failures / `AskUserQuestion` prompts to the macOS Notification Center when you are away from the terminal.                  |
+| Mod                                            | What it does                                                                                                                                                             |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [`cc-context-mod`](./cc-context-mod)           | One-line dashboard above the prompt: context window weather (left) + MiniMax M Plan / Token Plan balance (right).                                                        |
+| [`cc-code-format-mod`](./cc-code-format-mod)   | Reformats every fenced code block in an LLM response to the language's standard style (Prettier, black, gofmt, rustfmt, shfmt) before the row lands in the transcript.   |
+| [`cc-notify-mod`](./cc-notify-mod)             | Forwards `turn.complete` / repeated `Bash` failures / `AskUserQuestion` prompts to the macOS Notification Center when you are away from the terminal.                    |
 | [`cc-file-history-mod`](./cc-file-history-mod) | Panel listing every file Claude has edited this session, with a one-click **Revert** per edit that restores the file to its pre-edit content. Open with `/file-history`. |
 
 ## Install
@@ -57,8 +57,8 @@ scope):
 ```jsonc
 {
   "env": {
-    "CLAUDE_CODE_PLUGIN_DIRS": "C:\\Users\\kukak\\Documents\\project\\cc-mods\\cc-file-history-mod;C:\\Users\\kukak\\Documents\\project\\cc-mods\\cc-context-mod;C:\\Users\\kukak\\Documents\\project\\cc-mods\\cc-code-format-mod"
-  }
+    "CLAUDE_CODE_PLUGIN_DIRS": ".\\cc-mods\\cc-file-history-mod;.\\cc-mods\\cc-context-mod;.\\cc-mods\\cc-code-format-mod",
+  },
 }
 ```
 
@@ -145,7 +145,7 @@ If the engine refuses to draw what your `ui.render` hook returned, the transcrip
 `AbovePrompt` is the single band directly above the prompt input. Every
 mod's `on('ui.render', { component: 'AbovePrompt' }, ...)` handler
 contributes a row, but the engine picks the **last-returned** tree —
-whatever your handler returns *replaces* whatever earlier mods drew. If
+whatever your handler returns _replaces_ whatever earlier mods drew. If
 your mod is registered before `cc-context-mod`, `cc-context-mod`'s band
 will be replaced by yours (and vice versa). To render **both** bands at
 the same time, the engine docs (`code.claude.com/docs/<lang>/plugins/mods/interface`)
@@ -158,20 +158,27 @@ say:
 In `cc-file-history-mod` the handler does exactly this:
 
 ```ts
-on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-  const { Box } = $.ui.resolve(e)
-  const ourBand = renderBand($, e)
-  if (ourBand === null) return await next(e)            // nothing to add; yield
-  let others: unknown = null
-  try { others = await next(e) } catch { others = null }  // engine throws if alone
+on("ui.render", { component: "AbovePrompt" }, async ($, e, next) => {
+  const { Box } = $.ui.resolve(e);
+  const ourBand = renderBand($, e);
+  if (ourBand === null) return await next(e); // nothing to add; yield
+  let others: unknown = null;
+  try {
+    others = await next(e);
+  } catch {
+    others = null;
+  } // engine throws if alone
   const looksLikeElement =
-    others && typeof others === 'object' && typeof (others as any).type === 'string'
-  if (!looksLikeElement) return ourBand                  // no other band; just ours
-  return Box({                                          // compose both in a column
-    flexDirection: 'column',
+    others &&
+    typeof others === "object" &&
+    typeof (others as any).type === "string";
+  if (!looksLikeElement) return ourBand; // no other band; just ours
+  return Box({
+    // compose both in a column
+    flexDirection: "column",
     children: [others, ourBand],
-  })
-})
+  });
+});
 ```
 
 Live with both `cc-context-mod` and `cc-file-history-mod` loaded:
@@ -193,7 +200,7 @@ let the next plugin in the chain handle everything.
 To share this marketplace with another computer:
 
 ```bash
-cd /Users/lixinghui/Documents/code/fe/testground/cc-mods
+cd <path-to-your-cc-mods-clone>
 gh repo create cc-mods --public --source=. --push
 ```
 
