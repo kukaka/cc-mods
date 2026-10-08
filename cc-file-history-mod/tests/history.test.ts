@@ -7,6 +7,8 @@ import {
   formatTime,
   groupByFile,
   basename,
+  parentPath,
+  relativeTime,
   type EditRecord,
 } from '../hooks/history'
 
@@ -41,6 +43,12 @@ test('basename returns the last path segment regardless of separator', () => {
   expect(basename('/trailing/')).toBe('')
 })
 
+test('parentPath returns everything before basename with trailing slash', () => {
+  expect(parentPath('/x/y/z.ts')).toBe('/x/y/')
+  expect(parentPath('a\\b\\c.md')).toBe('a/b/')
+  expect(parentPath('plain.ts')).toBe('')
+})
+
 test('diffStats counts line deltas', () => {
   const two = 'a\nb'      // 2 lines: ['a', 'b']
   const three = 'a\nb\nc' // 3 lines: ['a', 'b', 'c']
@@ -55,6 +63,28 @@ test('formatTime produces HH:MM:SS', () => {
   // Anchor at a known wall-clock value. We don't pin the date, only shape.
   const out = formatTime(Date.now())
   expect(out).toMatch(/^\d{2}:\d{2}:\d{2}$/)
+})
+
+test('relativeTime formats seconds/minutes/hours/days, falls back to formatTime', () => {
+  const now = 1_000_000_000_000
+  // Seconds
+  expect(relativeTime(now - 5_000, now)).toBe('5s ago')
+  expect(relativeTime(now - 59_000, now)).toBe('59s ago')
+  // Minutes
+  expect(relativeTime(now - 60_000, now)).toBe('1 min ago')
+  expect(relativeTime(now - 59 * 60_000, now)).toBe('59 min ago')
+  // Hours
+  expect(relativeTime(now - 60 * 60_000, now)).toBe('1 hr ago')
+  expect(relativeTime(now - 23 * 60 * 60_000, now)).toBe('23 hr ago')
+  // Days
+  expect(relativeTime(now - 24 * 60 * 60_000, now)).toBe('1d ago')
+  expect(relativeTime(now - 6 * 24 * 60 * 60_000, now)).toBe('6d ago')
+  // Older than a week → absolute HH:MM:SS
+  const old = relativeTime(now - 8 * 24 * 60 * 60_000, now)
+  expect(old).toMatch(/^\d{2}:\d{2}:\d{2}$/)
+  // Clock skew (future timestamp) → absolute HH:MM:SS
+  const future = relativeTime(now + 60_000, now)
+  expect(future).toMatch(/^\d{2}:\d{2}:\d{2}$/)
 })
 
 test('groupByFile orders file groups by most-recent edit; records within desc', () => {

@@ -98,6 +98,17 @@ export function basename(p: string): string {
 }
 
 /**
+ * Everything before the basename, with a trailing `/`. Empty string when the
+ * path has no parent (basename only) — callers decide whether to omit.
+ */
+export function parentPath(p: string): string {
+  const norm = p.replace(/\\/g, '/')
+  const i = norm.lastIndexOf('/')
+  if (i < 0) return ''
+  return norm.slice(0, i + 1)
+}
+
+/**
  * Cheap "+N / -M" line-count delta without invoking a real diff. Suitable
  * for a small inline label; the renderer still shows the full content
  * snapshot on revert.
@@ -122,4 +133,24 @@ export function formatTime(ts: number): string {
   const d = new Date(ts)
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
+
+/**
+ * Compact human-readable "N s/min/hr/d ago" relative to `now` (default
+ * `Date.now()`). Falls back to `formatTime(ts)` for clock skew (future
+ * timestamps) and anything older than a week, where the absolute time reads
+ * more usefully than "8d ago".
+ */
+export function relativeTime(ts: number, now: number = Date.now()): string {
+  const deltaMs = now - ts
+  if (deltaMs < 0) return formatTime(ts)
+  const sec = Math.floor(deltaMs / 1000)
+  if (sec < 60) return `${sec}s ago`
+  const min = Math.floor(sec / 60)
+  if (min < 60) return `${min} min ago`
+  const hr = Math.floor(min / 60)
+  if (hr < 24) return `${hr} hr ago`
+  const day = Math.floor(hr / 24)
+  if (day < 7) return `${day}d ago`
+  return formatTime(ts)
 }
