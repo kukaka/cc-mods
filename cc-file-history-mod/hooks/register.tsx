@@ -51,6 +51,30 @@ const diffCache = new Map<number, string | null>()
 // Pane id must be 1-64 of letters, digits, `_` or `-` (host check).
 const PANE_ID = 'cc-file-history-mod-pane'
 
+// Cached Windows Terminal probe. `WT_SESSION` is set by Windows Terminal
+// and unset on every other terminal we test on (macOS Terminal, iTerm,
+// ConEmu, mintty, etc.). The AbovePrompt coexistence handler branches on
+// this — only WT needs the column-wrap-around-`others` workaround; on
+// every other terminal, a column-shaped first child of the column
+// container stretches to fill available vertical room on its own,
+// pushing the band off-screen (the same renderer bug, just with a
+// column trigger instead of a row-with-wrap trigger).
+let isWindowsTerminal: boolean | null = null
+
+async function probeWindowsTerminal($: EngineInterface): Promise<boolean> {
+  if (isWindowsTerminal !== null) return isWindowsTerminal
+  try {
+    // $.env.get requires a string literal — see cc-context-mod's use of
+    // "ANTHROPIC_API_KEY" / "MINIMAX_SUBSCRIPTION_KEY" for the pattern.
+    // Returns `undefined` (not throw) when the var is unset, so a truthy
+    // check is correct.
+    isWindowsTerminal = Boolean(await $.env.get('WT_SESSION'))
+  } catch {
+    isWindowsTerminal = false
+  }
+  return isWindowsTerminal
+}
+
 function resetState() {
   edits = []
   nextId = 1
@@ -933,6 +957,8 @@ function renderBand(
 export const register: Register = (on) => {
   on('session.start', async ($, e, next) => {
     resetState()
+    // Eagerly probe Windows Terminal so the render hot path stays sync.
+    await probeWindowsTerminal($)
     await $.command.register({
       name: 'file-history',
       description: 'Open / close the file-edit history pane',
@@ -1051,24 +1077,21 @@ export const register: Register = (on) => {
         typeof others === 'object' &&
         typeof (others as { type?: unknown }).type === 'string'
       if (!looksLikeElement) return ourBand as never
-      return Box({
-        flexDirection: 'column',
-        children: [
-          // Wrap `others` in an explicit column Box. cc-context-mod's tree
-          // is itself a row-with-wrap (outer Box has `flexDirection: 'row',
-          // `flexWrap: 'wrap'`, with three inner row Boxes as sections). On
-          // Windows Terminal, putting that row-with-wrap directly as the
-          // first child of a column container makes the renderer treat the
-          // first child as filling all available vertical room — `ourBand`
-          // gets pushed off-screen and only cc-context-mod's band stays.
-          // Wrapping `others` in a column-shaped Box isolates cc-context-mod's
-          // wrap behaviour from the column's own layout. macOS renders both
-          // bands correctly with or without the wrapper, so this is a no-op
-          // there.
-          Box({ flexDirection: 'column', children: [others] }),
-          ourBand,
-        ],
-      }) as never
+      // Coexistence with another AbovePrompt mod (typically cc-context-mod):
+      // compose `others` (their tree) and `ourBand` into a column. Two shapes:
+      //   * WT (cached in session.start): `others` is row-with-wrap — a
+      //     column-shape child of a column container would be safe, but a
+      //     row-with-wrap one is not; wrap it in an inner column Box to
+      //     isolate the wrap behavior.
+      //   * everything else (macOS, iTerm, ConEmu, mintty): a column-shape
+      //     first child of a column container fills vertical room — direct
+      //     nesting is the only shape that works. (The commit message of
+      //     4792958 claimed "macOS is unaffected", which the renderer now
+      //     proves wrong.)
+      const children = isWindowsTerminal
+        ? [Box({ flexDirection: 'column', children: [others] }), ourBand]
+        : [others, ourBand]
+      return Box({ flexDirection: 'column', children }) as never
     },
   )
 
