@@ -1,0 +1,9 @@
+{
+  "name": "cc-conversation-log-mod",
+  "version": "0.1.0",
+  "description": "Read-only view of every user and assistant message in the current session, with collapsible tool-call details and paged loading. Open with /history.",
+  "author": {
+    "name": "lixinghui"
+  },
+  "types": "./types/index.d.ts"
+}
