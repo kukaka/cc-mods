@@ -75,6 +75,14 @@ Closing via the engine's `[X]` / `Esc` also dismisses it; the
   `Revert` to proceed, `Cancel` to keep the file as-is. For `Write` that
   created a brand-new file, **Revert** deletes the file (the pre-edit
   state was "did not exist").
+- **Paths are project-relative.** File rows show paths under the session's
+  `$.session.cwd()` (e.g. `src/hooks/register.tsx`), not the absolute
+  paths the engine hands us in `tool.call.file_path`. Files edited outside
+  the project root (a `Bash rm /tmp/x.ts`, say) keep their absolute form
+  so you can still tell where they live. Grouping follows the relative
+  form, so two records of the same file collapse regardless of how the
+  tool call spelled the path. Revert itself still uses the absolute path
+  stored on the record — display is the only thing that changes.
 
 ## How it works
 
@@ -89,7 +97,6 @@ Closing via the engine's `[X]` / `Esc` also dismisses it; the
 | `ui.render { component: 'AbovePrompt' }` | Render the band tree (`▶ File history: N edits (M files) [ View ]`). Yields `next(e)` when there are no edits or the Pane is open. |
 | `ui.render { component: 'Pane', requestId: PANE_ID }` | Render the file-grouped edit list with `[Show]/[Hide]` and `[Revert]` per row. |
 | `ui.close { id: PANE_ID }` | Keep `paneOpen` in sync when the engine closes the Pane (Escape, X). Without this, X / Escape would leave the flag stale and the next `/file-history` would fight itself. |
-| `ui.render { component: 'Pane', requestId: PANE_ID }` | Render the file-grouped edit list with `[Show]/[Hide]` and `[Revert]` per row. |
 
 A `Revert` is a Button `onPress` closure — each button captures its edit
 ID in JS scope, calls `$.ui.ask` for confirmation, then either

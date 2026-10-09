@@ -30,6 +30,7 @@ import {
   formatTime,
   groupByFile,
   parentPath,
+  relativePath,
   relativeTime,
   type EditKind,
   type EditRecord,
@@ -73,6 +74,25 @@ async function probeWindowsTerminal($: EngineInterface): Promise<boolean> {
     isWindowsTerminal = false
   }
   return isWindowsTerminal
+}
+
+// Cached session cwd for project-relative display paths. Probed in
+// session.start so the render hot path stays sync; if it never resolves
+// (e.g. hot-reloaded module before session.start re-fires) we fall back to
+// absolute paths via `relativePath(_, null)`. The session cwd is the
+// directory the host launched in and moves only via `/cd` or worktree
+// changes — shell `cd` does not affect it (matches the engine docs for
+// `$.session.cwd()`).
+let cwdCache: string | null = null
+
+async function probeCwd($: EngineInterface): Promise<void> {
+  if (cwdCache !== null) return
+  try {
+    const c = await $.session.cwd()
+    if (typeof c === 'string' && c.length > 0) cwdCache = c
+  } catch {
+    /* keep null — renderPane will fall back to absolute paths */
+  }
 }
 
 function resetState() {
@@ -524,7 +544,7 @@ async function revertById($: EngineInterface, id: number) {
   if (!rec || !rec.applied) return
 
   const choice = await $.ui.ask(
-    `Revert ${rec.kind} on ${rec.filePath}?`,
+    `Revert ${rec.kind} on ${relativePath(rec.filePath, cwdCache)}?`,
     ['Revert', 'Cancel'],
   )
   if (choice !== 'Revert') return
@@ -626,7 +646,7 @@ function renderPane($: EngineInterface, e: PaneRenderEvent) {
     Code: El
   }
 
-  const groups = groupByFile(edits)
+  const groups = groupByFile(edits, cwdCache)
   const totalFiles = groups.length
   const totalEdits = edits.length
 
@@ -970,6 +990,8 @@ export const register: Register = (on) => {
     resetState()
     // Eagerly probe Windows Terminal so the render hot path stays sync.
     await probeWindowsTerminal($)
+    // Same trick for cwd — groupByFile needs it for relative-path grouping.
+    await probeCwd($)
     await $.command.register({
       name: 'file-history',
       description: 'Open / close the file-edit history pane',

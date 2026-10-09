@@ -57,15 +57,53 @@ export function cap<T>(records: readonly T[], max: number): T[] {
 }
 
 /**
+ * Strip the `cwd + '/'` prefix from `p` to produce a project-relative path.
+ * Returns `p` unchanged when it doesn't sit under `cwd`, when `cwd` is empty
+ * / null, or when `p` equals `cwd` exactly (the latter can't happen for a
+ * file, but we still want a sensible fallback rather than `''`).
+ *
+ * Both `p` and `cwd` are canonicalised through `canonicalPath` first so a
+ * mixed-separator `cwd` (`./foo` / `a\b`) doesn't break the prefix check.
+ *
+ * This is a *display / grouping* helper only. The stored `EditRecord.filePath`
+ * stays absolute because `$.fs.read` / `$.fs.write` and the Revert path need
+ * an absolute target. Two records that share the same relative form collapse
+ * into one group in `groupByFile`.
+ */
+export function relativePath(
+  p: string,
+  cwd: string | null | undefined,
+): string {
+  if (!cwd) return p
+  const normP = canonicalPath(p)
+  const normCwd = canonicalPath(cwd)
+  // Require both to be absolute (or both relative). `cwd = './work/proj'`
+  // against `p = '/work/proj/...'` is ambiguous — the leading `./` doesn't
+  // appear in p, so we'd never match. Fall through to absolute p in that
+  // case rather than silently produce a wrong relative path.
+  if (normP.startsWith('/') !== normCwd.startsWith('/')) return normP
+  if (normP === normCwd) return '.'
+  const prefix = normCwd.endsWith('/') ? normCwd : normCwd + '/'
+  if (normP.startsWith(prefix)) return normP.slice(prefix.length)
+  return normP
+}
+
+/**
  * Group records by file path, file groups sorted by most-recent record first,
  * records within a group sorted most-recent first.
+ *
+ * When `cwd` is provided, the group key is the cwd-relative form so two
+ * records of the same file (regardless of absolute-path spelling) collapse
+ * into one group, and `g.filePath` carries the relative form for display.
+ * Without `cwd`, behaviour is unchanged: absolute paths, canonicalised only.
  */
 export function groupByFile(
   records: readonly EditRecord[],
+  cwd?: string | null,
 ): Array<{ filePath: string; records: EditRecord[] }> {
   const byFile = new Map<string, EditRecord[]>()
   for (const r of records) {
-    const key = canonicalPath(r.filePath)
+    const key = relativePath(canonicalPath(r.filePath), cwd)
     const list = byFile.get(key) ?? []
     list.push(r)
     byFile.set(key, list)
