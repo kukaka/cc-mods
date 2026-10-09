@@ -26,6 +26,11 @@
       "name": "cc-file-history-mod",
       "source": "./cc-file-history-mod",
       "description": "Panel listing files edited by Claude in the current session, with a one-click Revert per edit that restores the file to its pre-edit content. Open with /file-history."
+    },
+    {
+      "name": "cc-conversation-log-mod",
+      "source": "./cc-conversation-log-mod",
+      "description": "Read-only panel of every user/assistant message in the current session, with collapsible tool-call groups and paged loading. Open with /history."
     }
   ]
 }

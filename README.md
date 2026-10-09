@@ -19,6 +19,7 @@ cc-mods/
 | [`cc-code-format-mod`](./cc-code-format-mod)   | Reformats every fenced code block in an LLM response to the language's standard style (Prettier, black, gofmt, rustfmt, shfmt) before the row lands in the transcript.   |
 | [`cc-notify-mod`](./cc-notify-mod)             | Forwards `turn.complete` / repeated `Bash` failures / `AskUserQuestion` prompts to the macOS Notification Center when you are away from the terminal.                    |
 | [`cc-file-history-mod`](./cc-file-history-mod) | Panel listing every file Claude has edited this session, with a one-click **Revert** per edit that restores the file to its pre-edit content. Open with `/file-history`. |
+| [`cc-conversation-log-mod`](./cc-conversation-log-mod) | Read-only panel of every user/assistant message in the current session, with collapsible tool-call groups and paged loading of older turns. Open with `/history`. |
 
 ## Install
 
