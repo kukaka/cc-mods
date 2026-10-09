@@ -8,6 +8,7 @@ import {
   groupByFile,
   basename,
   parentPath,
+  relativePath,
   relativeTime,
   type EditRecord,
 } from '../hooks/history'
@@ -114,4 +115,59 @@ test('groupByFile dedupes canonicalised paths', () => {
 
 test('groupByFile on empty input returns []', () => {
   expect(groupByFile([])).toEqual([])
+})
+
+test('relativePath strips cwd prefix when p sits under cwd', () => {
+  expect(relativePath('/work/proj/a/b.ts', '/work/proj')).toBe('a/b.ts')
+  expect(relativePath('/work/proj/a/b.ts', '/work/proj/')).toBe('a/b.ts')
+})
+
+test('relativePath returns p unchanged when p is outside cwd', () => {
+  expect(relativePath('/tmp/foo.ts', '/work/proj')).toBe('/tmp/foo.ts')
+  expect(relativePath('/work/other/a.ts', '/work/proj')).toBe('/work/other/a.ts')
+})
+
+test('relativePath canonicalises cwd and p before the prefix check', () => {
+  // cwd has a middle "./" segment that canonicalPath should collapse.
+  expect(relativePath('/work/proj/a/b.ts', '/work/./proj')).toBe('a/b.ts')
+  // Trailing-slash cwd like the parent's parentPath helper emits.
+  expect(relativePath('/work/proj/a/b.ts', '/work/proj/')).toBe('a/b.ts')
+})
+
+test('relativePath falls back to absolute when cwd is relative but p is absolute', () => {
+  // Ambiguous case — leading "./" never appears in the absolute p.
+  expect(relativePath('/work/proj/a/b.ts', '.\\work\\proj')).toBe(
+    '/work/proj/a/b.ts',
+  )
+})
+
+test('relativePath returns p as-is when cwd is null/empty/undefined', () => {
+  expect(relativePath('/work/proj/a.ts', null)).toBe('/work/proj/a.ts')
+  expect(relativePath('/work/proj/a.ts', '')).toBe('/work/proj/a.ts')
+  expect(relativePath('/work/proj/a.ts', undefined)).toBe('/work/proj/a.ts')
+})
+
+test('relativePath returns "." when p equals cwd exactly', () => {
+  expect(relativePath('/work/proj', '/work/proj')).toBe('.')
+})
+
+test('groupByFile with cwd collapses to project-relative keys', () => {
+  const records: EditRecord[] = [
+    rec({ id: 1, filePath: '/work/proj/a.ts', ts: 100 }),
+    rec({ id: 2, filePath: '/work/proj/a.ts', ts: 200 }),
+    rec({ id: 3, filePath: '/work/proj/inner/b.ts', ts: 150 }),
+    rec({ id: 4, filePath: '/work/proj/inner/b.ts', ts: 300 }),
+    // Outside cwd — appears as its own group, key stays absolute.
+    rec({ id: 5, filePath: '/tmp/x.ts', ts: 250 }),
+  ]
+  // Sorted by most-recent record: inner/b.ts (300) > /tmp/x.ts (250) > a.ts (200).
+  const groups = groupByFile(records, '/work/proj')
+  expect(groups.map(g => g.filePath)).toEqual([
+    'inner/b.ts',
+    '/tmp/x.ts',
+    'a.ts',
+  ])
+  expect(groups[0]?.records.map(r => r.id)).toEqual([4, 3])
+  expect(groups[1]?.records.map(r => r.id)).toEqual([5])
+  expect(groups[2]?.records.map(r => r.id)).toEqual([2, 1])
 })
