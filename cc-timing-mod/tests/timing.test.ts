@@ -1,15 +1,19 @@
 import { expect, test } from 'claude-code/testing'
 
-import type { StepRecord, ToolRecord, TurnRecord } from '../types'
+import type { StepPhaseSpan, StepRecord, ToolRecord, TurnRecord } from '../types'
 import {
+  MAX_PHASE_SPANS,
   capList,
   coveredMs,
   formatDuration,
   formatTokens,
   mergeIntervals,
+  phaseOfChunk,
+  pushSpan,
   subtractMs,
   summarize,
   summarizeLabel,
+  summarizeStep,
   waitMsOf,
 } from '../hooks/timing'
 
@@ -23,6 +27,7 @@ const step = (over: Partial<StepRecord> = {}): StepRecord => ({
   startMs: 1000,
   endMs: 2000,
   ttfbMs: 200,
+  phases: [],
   toolCallCount: 0,
   serverToolMs: 0,
   inputTokens: 100,
@@ -272,7 +277,7 @@ test('summarize ranks the turn\'s slowest tools and costliest hooks', () => {
   expect(s.hookMs).toBe(520)
 })
 
-test('summarize averages the time to first token', () => {
+test('summarize adds up the time to first token over the turn', () => {
   const t = turn({
     startMs: 0,
     endMs: 10_000,
@@ -281,7 +286,7 @@ test('summarize averages the time to first token', () => {
       step({ startMs: 1000, endMs: 3000, ttfbMs: 500 }),
     ],
   })
-  expect(summarize(t, 10_000).ttfbAvgMs).toBe(300)
+  expect(summarize(t, 10_000).ttfbMs).toBe(600)
 })
 
 test('summarize splits a tool call into its execution and the overhead around it', () => {
@@ -295,4 +300,125 @@ test('summarize splits a tool call into its execution and the overhead around it
   expect(s.toolMs).toBe(2200)
   expect(s.toolExecMs).toBe(270)
   expect(s.toolOverheadMs).toBe(1930)
+})
+
+// ---------------------------------------------------------------------------
+// The model's phases
+// ---------------------------------------------------------------------------
+
+test('phaseOfChunk reads the chunk kind as the phase it belongs to', () => {
+  expect(phaseOfChunk({ kind: 'thinking' })).toBe('think')
+  expect(phaseOfChunk({ kind: 'text' })).toBe('text')
+  expect(phaseOfChunk({ kind: 'tool' })).toBe('tool')
+  // The arguments of a call are the model writing the call.
+  expect(phaseOfChunk({ kind: 'input' })).toBe('tool')
+  // The engine's own chunks are the API's own work.
+  expect(phaseOfChunk({ kind: 'engine' })).toBe('api')
+  expect(phaseOfChunk({ kind: 'stop' })).toBe('api')
+})
+
+test('pushSpan merges the stretches that touch and share a phase', () => {
+  const spans: StepPhaseSpan[] = []
+  pushSpan(spans, 'think', 100, 200)
+  pushSpan(spans, 'think', 200, 300)
+  expect(spans).toEqual([{ phase: 'think', startMs: 100, endMs: 300 }])
+
+  // A different phase starts a stretch of its own.
+  pushSpan(spans, 'text', 300, 400)
+  expect(spans).toHaveLength(2)
+
+  // A stretch of no time is no stretch.
+  pushSpan(spans, 'text', 400, 400)
+  expect(spans).toHaveLength(2)
+})
+
+test('pushSpan bounds how many stretches one request keeps', () => {
+  const spans: StepPhaseSpan[] = []
+  for (let i = 0; i < MAX_PHASE_SPANS + 10; i++) {
+    pushSpan(spans, i % 2 === 0 ? 'think' : 'text', i * 10, i * 10 + 5)
+  }
+  expect(spans.length).toBe(MAX_PHASE_SPANS)
+})
+
+test('summarizeStep splits a request into its first byte and its phases', () => {
+  const s = summarizeStep(
+    step({
+      startMs: 1000,
+      endMs: 5000,
+      ttfbMs: 200,
+      phases: [
+        { phase: 'think', startMs: 1200, endMs: 2200 },
+        { phase: 'text', startMs: 2200, endMs: 4200 },
+        { phase: 'api', startMs: 4200, endMs: 5000 },
+      ],
+    }),
+  )
+  expect(s.totalMs).toBe(4000)
+  expect(s.ttfbMs).toBe(200)
+  expect(s.phaseMs.think).toBe(1000)
+  expect(s.phaseMs.text).toBe(2000)
+  expect(s.phaseMs.api).toBe(800)
+  expect(s.genMs).toBe(3800)
+})
+
+test('summarize breaks the model time into phases that add up to it', () => {
+  const t = turn({
+    startMs: 0,
+    endMs: 10_000,
+    steps: [
+      step({
+        startMs: 0,
+        endMs: 4000,
+        ttfbMs: 200,
+        phases: [
+          { phase: 'think', startMs: 200, endMs: 1200 },
+          { phase: 'text', startMs: 1200, endMs: 3200 },
+          { phase: 'api', startMs: 3200, endMs: 4000 },
+        ],
+      }),
+    ],
+  })
+  const s = summarize(t, 10_000)
+  expect(s.modelMs).toBe(4000)
+  expect(s.ttfbMs).toBe(200)
+  expect(s.phaseMs.think).toBe(1000)
+  expect(s.phaseMs.text).toBe(2000)
+  expect(s.phaseMs.api).toBe(800)
+  expect(s.genMs).toBe(3800)
+  // The wait for the first byte and the phases after it are the model
+  // bucket, split — neither more nor less.
+  expect(s.ttfbMs + s.genMs).toBe(s.modelMs)
+})
+
+test('a tool that overlapped a phase takes that time from it', () => {
+  // The engine starts the tool while the model is still writing.
+  const t = turn({
+    startMs: 0,
+    endMs: 10_000,
+    steps: [
+      step({
+        startMs: 0,
+        endMs: 5000,
+        ttfbMs: 200,
+        phases: [
+          { phase: 'think', startMs: 200, endMs: 1200 },
+          { phase: 'text', startMs: 1200, endMs: 4800 },
+          { phase: 'api', startMs: 4800, endMs: 5000 },
+        ],
+      }),
+    ],
+    tools: [tool({ startMs: 3000, endMs: 4000 })],
+  })
+  const s = summarize(t, 10_000)
+  expect(s.modelMs).toBe(4000)
+  expect(s.phaseMs.text).toBe(2600)
+  expect(s.phaseMs.think).toBe(1000)
+  expect(s.ttfbMs + s.genMs).toBe(s.modelMs)
+})
+
+test('a request recorded before the phase split is the API\'s own time', () => {
+  const s = summarizeStep(step({ startMs: 0, endMs: 1000, ttfbMs: 100, phases: [] }))
+  expect(s.ttfbMs).toBe(100)
+  expect(s.phaseMs.api).toBe(900)
+  expect(s.genMs).toBe(900)
 })

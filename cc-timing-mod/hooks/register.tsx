@@ -42,7 +42,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { StepRecord, ToolRecord, TurnRecord } from '../types'
+import type { StepPhaseSpan, StepRecord, ToolRecord, TurnRecord } from '../types'
 import {
   MAX_STEPS,
   MAX_TOOLS,
@@ -51,8 +51,11 @@ import {
   formatClock,
   formatDuration,
   formatTokens,
+  phaseOfChunk,
+  pushSpan,
   summarize,
   summarizeLabel,
+  summarizeStep,
   waitMsOf,
 } from './timing'
 
@@ -290,11 +293,19 @@ export const register: Register = (on, options) => {
 
   // The model request. This hook is a generator: it wraps the engine's
   // stream, times it, and hands every chunk on untouched.
+  //
+  // The chunks are typed, and the type says what the API was doing when
+  // each one arrived: a thinking chunk means the model was thinking, a
+  // text chunk means it was writing, a tool chunk means it was writing a
+  // call. The time between two chunks is the time the API spent producing
+  // the later one — that is what splits the request into phases.
   on('turn.step', async function* ($, e, next) {
     const startMs = Date.now()
     let ttfbMs = 0
     let chunks = 0
     let endMs = startMs
+    let lastChunkMs = startMs
+    const phases: StepPhaseSpan[] = []
     let result: {
       toolUses?: readonly unknown[]
       serverToolUses?: readonly { startedAt: number; endedAt?: number }[]
@@ -310,7 +321,13 @@ export const register: Register = (on, options) => {
     try {
       const stream = next(e)
       for await (const chunk of stream) {
-        if (chunks === 0) ttfbMs = Date.now() - startMs
+        const at = Date.now()
+        if (chunks === 0) {
+          ttfbMs = at - startMs
+        } else {
+          pushSpan(phases, phaseOfChunk(chunk), lastChunkMs, at)
+        }
+        lastChunkMs = at
         chunks += 1
         yield chunk
       }
@@ -325,6 +342,11 @@ export const register: Register = (on, options) => {
       failure = err
     }
 
+    // What came after the last chunk is the engine's own: the stop reason
+    // and the usage arriving. A request that streamed nothing at all is
+    // one stretch of the API's own time.
+    pushSpan(phases, 'api', lastChunkMs, endMs)
+
     const usage = result?.usage ?? null
     const serverToolMs = (result?.serverToolUses ?? []).reduce(
       (sum, u) => sum + Math.max(0, (u.endedAt ?? endMs) - u.startedAt),
@@ -336,6 +358,7 @@ export const register: Register = (on, options) => {
       startMs,
       endMs,
       ttfbMs,
+      phases,
       toolCallCount: result?.toolUses?.length ?? 0,
       serverToolMs,
       inputTokens: usage?.input_tokens ?? 0,
@@ -769,10 +792,29 @@ function renderTurnRow(
       ? ''
       : `${s.toolCount} call${s.toolCount === 1 ? '' : 's'}` +
         (s.toolExecMs > 0 ? ` · exec ${formatDuration(s.toolExecMs)}` : '') +
-        (s.toolOverheadMs > 500 ? ` · ${formatDuration(s.toolOverheadMs)} overhead` : '')
+        (s.toolOverheadMs > 500 ? ` · ${formatDuration(s.toolOverheadMs)} overhead` : '') +
+        (s.topTools.length > 0
+          ? ` · ${s.topTools
+              .slice(0, 3)
+              .map((t) => `${t.name} ${formatDuration(t.ms)}`)
+              .join(' · ')}`
+          : '')
+
+  // The model's own time, broken down: the wait for the response's first
+  // byte, then what the model did with the rest of it. A phase that cost
+  // nothing is left out — a row of zeroes is noise.
+  const modelNote = [
+    `${s.requestCount} request${s.requestCount === 1 ? '' : 's'}`,
+    ...(s.ttfbMs > 0 ? [`ttfb ${formatDuration(s.ttfbMs)}`] : []),
+    ...(s.genMs > 0 ? [`gen ${formatDuration(s.genMs)}`] : []),
+    ...(s.phaseMs.think > 0 ? [`think ${formatDuration(s.phaseMs.think)}`] : []),
+    ...(s.phaseMs.text > 0 ? [`text ${formatDuration(s.phaseMs.text)}`] : []),
+    ...(s.phaseMs.tool > 0 ? [`tool ${formatDuration(s.phaseMs.tool)}`] : []),
+    ...(s.phaseMs.api > 0 ? [`api ${formatDuration(s.phaseMs.api)}`] : []),
+  ].join(' · ')
 
   const buckets: unknown[] = [
-    bucket('model', formatDuration(s.modelMs), `${s.requestCount} request${s.requestCount === 1 ? '' : 's'}`),
+    bucket('model', formatDuration(s.modelMs), modelNote),
     bucket('tools', formatDuration(s.toolMs), toolNote),
   ]
   if (s.approvalMs > 0) {
@@ -813,6 +855,9 @@ function renderTurnRow(
   if (turn.steps.length > 0) {
     details.push($el.Text({ dimColor: true, bold: true, children: 'requests' }))
     for (const step of turn.steps) {
+      const ss = summarizeStep(step)
+      // The request's own split: the wait for the first byte, then the
+      // phases it spent after it.
       details.push(
         $el.Box({
           flexDirection: 'row',
@@ -820,8 +865,32 @@ function renderTurnRow(
           paddingLeft: 4,
           children: [
             $el.Text({ children: `#${step.index}` }),
-            $el.Text({ children: formatDuration(step.endMs - step.startMs) }),
-            $el.Text({ dimColor: true, children: `ttfb ${formatDuration(step.ttfbMs)}` }),
+            $el.Text({ children: formatDuration(ss.totalMs) }),
+            $el.Text({ dimColor: true, children: `ttfb ${formatDuration(ss.ttfbMs)}` }),
+            $el.Text({ dimColor: true, children: `gen ${formatDuration(ss.genMs)}` }),
+            ...(ss.phaseMs.think > 0
+              ? [$el.Text({ dimColor: true, children: `think ${formatDuration(ss.phaseMs.think)}` })]
+              : []),
+            ...(ss.phaseMs.text > 0
+              ? [$el.Text({ dimColor: true, children: `text ${formatDuration(ss.phaseMs.text)}` })]
+              : []),
+            ...(ss.phaseMs.tool > 0
+              ? [$el.Text({ dimColor: true, children: `tool ${formatDuration(ss.phaseMs.tool)}` })]
+              : []),
+            ...(ss.phaseMs.api > 0
+              ? [$el.Text({ dimColor: true, children: `api ${formatDuration(ss.phaseMs.api)}` })]
+              : []),
+          ],
+        }),
+      )
+      // The request's second line: which model answered, what it cost, and
+      // the tools the API ran itself.
+      details.push(
+        $el.Box({
+          flexDirection: 'row',
+          gap: 1,
+          paddingLeft: 6,
+          children: [
             $el.Text({ dimColor: true, children: step.model }),
             $el.Text({
               dimColor: true,
@@ -829,6 +898,9 @@ function renderTurnRow(
                 `in ${formatTokens(step.inputTokens)} · out ${formatTokens(step.outputTokens)}` +
                 (step.toolCallCount > 0 ? ` · ${step.toolCallCount} tool call(s)` : ''),
             }),
+            ...(step.serverToolMs > 0
+              ? [$el.Text({ dimColor: true, children: `server ${formatDuration(step.serverToolMs)}` })]
+              : []),
           ],
         }),
       )

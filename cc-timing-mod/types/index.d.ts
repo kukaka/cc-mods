@@ -9,6 +9,40 @@
 // primitive or a plain array/object — no Date, no Map, no undefined.
 
 /**
+ * The phases one model request's wall clock splits into.
+ *
+ * The wait for the response's first byte is not one of these — it is the
+ * request's `ttfbMs` — and the phases cover what came after it.
+ */
+export type StepPhase =
+  /** The model was thinking (extended thinking). */
+  | 'think'
+  /** The model was writing the text you see. */
+  | 'text'
+  /** The model was writing a tool call — its name and its arguments. */
+  | 'tool'
+  /**
+   * The API's own work between the model's blocks: the block boundaries, a
+   * retry, and the tools the API runs itself (web search and friends).
+   */
+  | 'api'
+
+/**
+ * One stretch of a model request's time, spent in one phase.
+ *
+ * A request's stretches tile its wall clock after the first byte, so their
+ * lengths add up to the request's length.
+ */
+export type StepPhaseSpan = {
+  /** The phase the time was spent in. */
+  phase: StepPhase
+  /** Wall-clock ms when the stretch began. */
+  startMs: number
+  /** Wall-clock ms when the stretch ended. */
+  endMs: number
+}
+
+/**
  * One model request of a turn (`turn.step`).
  *
  * A turn is a sequence of these: the model answers, the engine runs the
@@ -26,6 +60,12 @@ export type StepRecord = {
   endMs: number
   /** Ms from the request to its first chunk — the time to first token. */
   ttfbMs: number
+  /**
+   * The request's time after the first byte, split into phases. The spans
+   * tile the rest of the request, so their lengths add up to the request's
+   * length minus `ttfbMs`.
+   */
+  phases: StepPhaseSpan[]
   /** How many tool calls the response asked the engine to run. */
   toolCallCount: number
   /** Ms the API spent on the tools it ran itself (web search and friends). */

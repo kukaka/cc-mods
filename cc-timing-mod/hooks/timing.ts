@@ -5,7 +5,7 @@
 // (register.tsx) and the rendering code: the session's list of turns is the
 // mod's only state, and timing.* is what the renderer reads.
 
-import type { ToolRecord, TurnRecord } from '../types'
+import type { StepPhase, StepPhaseSpan, StepRecord, ToolRecord, TurnRecord } from '../types'
 
 /** How many turns the session keeps. Older ones fall off the end. */
 export const MAX_TURNS = 30
@@ -13,6 +13,13 @@ export const MAX_TURNS = 30
 /** How many model requests / tool calls one turn keeps. */
 export const MAX_STEPS = 40
 export const MAX_TOOLS = 40
+
+/**
+ * How many phase stretches one model request keeps. Past this the time
+ * joins the stretch before it: a request with more phases than that is
+ * pathological, and a bounded list is worth more than a perfect split.
+ */
+export const MAX_PHASE_SPANS = 24
 
 /** A span of wall-clock time, in epoch ms. */
 export type Interval = { start: number; end: number }
@@ -43,8 +50,21 @@ export type TurnSummary = {
   requestCount: number
   /** How many tool calls the turn made. */
   toolCount: number
-  /** Mean time to first token over the turn's requests. */
-  ttfbAvgMs: number
+  /**
+   * The time the turn's requests spent waiting for their first byte — the
+   * queueing and the input processing before the model said anything.
+   */
+  ttfbMs: number
+  /**
+   * The time the turn's requests spent producing: everything after the
+   * first byte. The phases below add up to it.
+   */
+  genMs: number
+  /**
+   * The model time by phase. The same time as `modelMs`, broken down —
+   * `think` + `text` + `tool` + `api` is `genMs`.
+   */
+  phaseMs: Record<StepPhase, number>
   /** The turn's slowest tools, by total time. */
   topTools: { name: string; ms: number }[]
   /** The plugins whose hooks cost the turn the most. */
@@ -106,6 +126,98 @@ export function subtractMs(a: Interval[], b: Interval[]): number {
     if (cursor < iv.end) total += iv.end - cursor
   }
   return total
+}
+
+/**
+ * The phase a chunk of the model's response belongs to.
+ *
+ * The chunk that arrives tells us what the API was doing in the time
+ * before it: a thinking chunk means the model was thinking, a text chunk
+ * means it was writing, a tool chunk means it was writing a call, and the
+ * engine's own chunks (the envelope, the block boundaries, the stop) mean
+ * the API was doing its own work.
+ */
+export function phaseOfChunk(chunk: { kind: string }): StepPhase {
+  switch (chunk.kind) {
+    case 'thinking':
+      return 'think'
+    case 'text':
+      return 'text'
+    case 'tool':
+    case 'input':
+      return 'tool'
+    default:
+      return 'api'
+  }
+}
+
+/**
+ * Adds a stretch of time to a request's phases, merging it into the
+ * stretch before it when they touch and share a phase.
+ *
+ * Past `MAX_PHASE_SPANS` the time joins the last stretch: a request with
+ * more phases than that is pathological, and a bounded list is worth more
+ * than a perfect split.
+ */
+export function pushSpan(
+  spans: StepPhaseSpan[],
+  phase: StepPhase,
+  from: number,
+  to: number,
+): void {
+  if (to <= from) return
+  const last = spans[spans.length - 1]
+  if (last && last.phase === phase && last.endMs === from) {
+    last.endMs = to
+    return
+  }
+  if (spans.length >= MAX_PHASE_SPANS) {
+    if (last) last.endMs = Math.max(last.endMs, to)
+    return
+  }
+  spans.push({ phase, startMs: from, endMs: to })
+}
+
+/**
+ * A request's phase stretches, as recorded.
+ *
+ * A request recorded before the phase split existed has none: its time
+ * after the first byte is reported as the API's own, which is the most we
+ * can say about it.
+ */
+function spansOf(step: StepRecord): StepPhaseSpan[] {
+  const spans = step.phases
+  if (spans && spans.length > 0) return spans
+  const rest = step.endMs - step.startMs - step.ttfbMs
+  if (rest <= 0) return []
+  return [{ phase: 'api', startMs: step.startMs + step.ttfbMs, endMs: step.endMs }]
+}
+
+/**
+ * One model request's own split: the wait for its first byte, and what the
+ * model did with the rest.
+ */
+export type StepSummary = {
+  /** The request's wall clock. */
+  totalMs: number
+  /** The wait for the response's first byte. */
+  ttfbMs: number
+  /** The time after the first byte — the phases below add up to it. */
+  genMs: number
+  /** The request's time by phase. */
+  phaseMs: Record<StepPhase, number>
+}
+
+/** Splits one model request into the wait for its first byte and its phases. */
+export function summarizeStep(step: StepRecord): StepSummary {
+  const totalMs = Math.max(0, step.endMs - step.startMs)
+  const ttfbMs = Math.max(0, Math.min(step.ttfbMs, totalMs))
+  const phaseMs: Record<StepPhase, number> = { think: 0, text: 0, tool: 0, api: 0 }
+  for (const span of spansOf(step)) {
+    phaseMs[span.phase] += Math.max(0, span.endMs - span.startMs)
+  }
+  const genMs = phaseMs.think + phaseMs.text + phaseMs.tool + phaseMs.api
+  return { totalMs, ttfbMs, genMs, phaseMs }
 }
 
 /** A wall-clock length, the way a person reads it: `840ms`, `12.3s`, `1m 12s`. */
@@ -192,6 +304,30 @@ export function summarize(turn: TurnRecord, now: number): TurnSummary {
   const modelMs = subtractMs(modelIv, toolIv)
   const toolMs = coveredMs(toolIv)
 
+  // The model's own time, phase by phase. The same subtraction as above: a
+  // phase a tool covered is the tool's, so the phases add up to the model
+  // bucket and not to more than it.
+  const ttfbMs = subtractMs(
+    turn.steps.map((s) => ({ start: s.startMs, end: s.startMs + s.ttfbMs })),
+    toolIv,
+  )
+  const phaseOf = (phase: StepPhase): number =>
+    subtractMs(
+      turn.steps.flatMap((s) =>
+        spansOf(s)
+          .filter((p) => p.phase === phase)
+          .map((p) => ({ start: p.startMs, end: p.endMs })),
+      ),
+      toolIv,
+    )
+  const phaseMs: Record<StepPhase, number> = {
+    think: phaseOf('think'),
+    text: phaseOf('text'),
+    tool: phaseOf('tool'),
+    api: phaseOf('api'),
+  }
+  const genMs = phaseMs.think + phaseMs.text + phaseMs.tool + phaseMs.api
+
   // The tool's own execution sits at the tail of its dispatch (the engine
   // starts the call, then the tool runs, then the result comes back), so
   // the time left over is the engine's overhead around it.
@@ -203,11 +339,6 @@ export function summarize(turn: TurnRecord, now: number): TurnSummary {
     }))
   const toolExecMs = coveredMs(execIv)
   const toolOverheadMs = Math.max(0, toolMs - toolExecMs)
-
-  const ttfbAvgMs =
-    turn.steps.length === 0
-      ? 0
-      : turn.steps.reduce((sum, s) => sum + s.ttfbMs, 0) / turn.steps.length
 
   // Slowest tools, by the time each name cost the turn.
   const byTool = new Map<string, number>()
@@ -235,7 +366,9 @@ export function summarize(turn: TurnRecord, now: number): TurnSummary {
     otherMs,
     requestCount: turn.steps.length,
     toolCount: turn.tools.length,
-    ttfbAvgMs,
+    ttfbMs,
+    genMs,
+    phaseMs,
     topTools,
     topHooks,
     inputTokens: turn.inputTokens,
