@@ -31,6 +31,11 @@
       "name": "cc-conversation-log-mod",
       "source": "./cc-conversation-log-mod",
       "description": "Read-only panel of every user/assistant message in the current session, with collapsible tool-call groups and paged loading. Open with /history."
+    },
+    {
+      "name": "cc-timing-mod",
+      "source": "./cc-timing-mod",
+      "description": "Profiles where a turn's wall-clock time went: model requests vs tool calls vs approval waits vs other plugins' hooks. Live one-line summary above the prompt, full breakdown in a pane (/timing)."
     }
   ]
 }

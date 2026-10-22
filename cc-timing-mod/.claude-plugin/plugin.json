@@ -1,0 +1,17 @@
+{
+  "name": "cc-timing-mod",
+  "version": "0.1.0",
+  "description": "Profiles where a turn's wall-clock time went: model requests vs tool calls vs approval waits vs other plugins' hooks. Live one-line summary above the prompt, full breakdown in a pane (/timing).",
+  "author": {
+    "name": "lixinghui"
+  },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "slowTurnSeconds": {
+      "type": "number",
+      "title": "Slow turn toast (seconds)",
+      "description": "A turn slower than this raises a toast naming the buckets (model / tools / approval). 0 turns the toast off.",
+      "default": 30
+    }
+  }
+}
