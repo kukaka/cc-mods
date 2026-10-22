@@ -183,6 +183,27 @@ Live with both `cc-context-mod` and `cc-file-history-mod` loaded:
 `cc-context-mod`'s band sits on top, `▶ File history: N edits …` sits
 below it; both visible together after every Edit.
 
+### Every mod in the chain must call `next(e)`
+
+The chain is only as long as the mods that keep it going. A handler
+that returns its own tree **without** `await next(e)` ends the chain
+there: the mods after it never run, so their bands never appear — not
+dimmed, not hidden behind ours, simply never drawn.
+
+`cc-context-mod` used to do exactly that, and the symptom was confusing:
+its band and `cc-timing-mod`'s showed (timing is loaded before it and
+pulls context's tree through `next(e)`), while `cc-conversation-log-mod`
+and `cc-file-history-mod` (loaded after it) showed nothing at all. Its
+handler now composes like the others', so the chain no longer depends on
+the order the mods are loaded in.
+
+Which mod's band lands where depends on the shape each mod draws: most
+of them put the tree they got from `next(e)` first and their own row
+under it, while `cc-context-mod` puts its own row first. With the mods
+loaded in the order of `CLAUDE_CODE_PLUGIN_DIRS` (timing, code-format,
+context, conversation-log, file-history) the stack reads top to bottom:
+context, conversation-log, file-history, timing.
+
 Layout rules that bit earlier builds — keep the band's own row plain
 (no `flexWrap`, no `flexGrow: 1` spacers, no nested Boxes inside the
 row itself). Reach for `flexWrap` only after you have more than one

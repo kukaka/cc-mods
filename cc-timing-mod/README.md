@@ -7,7 +7,7 @@ did; it never tells you *where the time went*. This mod measures every turn
 and splits its wall-clock time into the buckets that explain a slow one.
 
 ```
-⏱ last turn: 1m 12s · model 48.2s · tools 18.1s · approval 5.0s · hooks 2.3s
+▶ Timing: last turn 1m 12s · model 48.2s · tools 18.1s · approval 5.0s · hooks 2.3s
 ```
 
 ## The buckets
@@ -34,10 +34,10 @@ tools      2.2s    1 call · exec 270ms · 1.9s overhead
 ### AbovePrompt band
 
 A live one-line summary of the running turn (and of the last turn once it
-ends), with a **Details** button:
+ends), with a **View** button:
 
 ```
-⏱ turn: 42.1s · model 30.4s · tools 9.2s
+▶ Timing: turn 42.1s · model 30.4s · tools 9.2s
 ```
 
 It ticks once a second while a turn runs, and yields the band to other mods

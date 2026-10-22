@@ -197,10 +197,10 @@ describe('the AbovePrompt band', () => {
         props: BAND_PROPS,
       }),
     )
-    expect(textsOf(band).find((t) => t.startsWith('⏱'))).toBeUndefined()
+    expect(textsOf(band).find((t) => t.startsWith('▶'))).toBeUndefined()
   })
 
-  test('shows the turn\'s buckets and a [Details] button', async ($, on) => {
+  test('shows the turn\'s buckets and a [View] button', async ($, on) => {
     on('command.register', () => ({ value: { command: COMMAND_NAME } }))
     await bootstrap($, on)
     await runTurn($)
@@ -215,16 +215,16 @@ describe('the AbovePrompt band', () => {
     )
 
     const title = findAll(band, 'Text').find(
-      (t) => typeof t.children?.[0] === 'string' && t.children[0].startsWith('⏱'),
+      (t) => typeof t.children?.[0] === 'string' && t.children[0].startsWith('▶'),
     )
     expect(title).toBeDefined()
     const text = asText(title)
-    expect(text).toContain('turn:')
+    expect(text).toContain('Timing:')
     expect(text).toContain('model ')
     expect(text).toContain('tools ')
     expect(title?.props?.color).toBe('magenta')
 
-    const btn = findAll(band, 'Button').find((b) => b.props?.label === 'Details')
+    const btn = findAll(band, 'Button').find((b) => b.props?.label === 'View')
     expect(btn).toBeDefined()
     expect(btn?.props?.variant).toBe('primary')
   })

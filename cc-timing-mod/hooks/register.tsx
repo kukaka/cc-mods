@@ -13,7 +13,7 @@
 // Two surfaces:
 //
 //   AbovePrompt band — a live one-line summary of the running turn (and of
-//   the last turn once it ends), with a [Details] button. This is the
+//   the last turn once it ends), with a [View] button. This is the
 //   answer to "why is it taking so long" without leaving the prompt.
 //
 //   Pane — opened with /timing or the band's button. One block per turn,
@@ -872,6 +872,10 @@ function renderTurnRow(
 
 // ---------------------------------------------------------------------------
 // AbovePrompt band — one live line about the running turn.
+//
+// The shape follows the other bands (cc-file-history-mod, cc-conversation-log-mod):
+// a `▶` marker, the mod's name and its figures in one magenta line, and a
+// button to open the Pane. The hotkey is `t` — the other bands hold `v` and `h`.
 // ---------------------------------------------------------------------------
 
 async function renderBand($: EngineInterface, e: { surface: string }): Promise<unknown | null> {
@@ -933,11 +937,11 @@ async function renderBand($: EngineInterface, e: { surface: string }): Promise<u
       $el.Text({
         color: 'magenta',
         bold: true,
-        children: `⏱ ${running ? 'turn' : 'last turn'}: ${parts.join(' · ')}`,
+        children: `▶ Timing: ${running ? 'turn' : 'last turn'} ${parts.join(' · ')}`,
       }),
       $el.Button({
         key: 'open-pane',
-        label: 'Details',
+        label: 'View',
         hotkey: 't',
         variant: 'primary',
         onPress: openPane,
