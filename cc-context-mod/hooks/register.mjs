@@ -51,6 +51,10 @@
 // session.start: first reading, first balance fetch, starts a 60s timer.
 // ui.render (AbovePrompt): one band — context weather on the left, the
 //   5h and 7d M Plan windows on the right, separated by a divider.
+//   The band is shared with every other mod that draws one (cc-timing-mod,
+//   cc-conversation-log-mod, cc-file-history-mod): this handler composes
+//   our band with the tree the other mods drew (`await next(e)`) instead
+//   of returning ours alone. See the handler for the shapes.
 //
 // readUsage dedupes against the last real reading: when multiple hooks
 // report the same tokens+window (e.g. session.measure and turn.complete
@@ -81,6 +85,35 @@ let readings = [];
 let balance = null;
 let lastFetchAt = 0;
 
+// Cached Windows Terminal probe. `WT_SESSION` is set by Windows Terminal
+// and unset on every other terminal (macOS Terminal, iTerm, ConEmu,
+// mintty). The AbovePrompt coexistence handler branches on it — see
+// there for why the two terminals need different tree shapes.
+//
+// The probe is memoized on the promise, not only on its value: a hot
+// reload of this mod resets the module state, and the render path must
+// not have to wait for a fresh probe more than once. session.start
+// probes eagerly so the first render has the answer ready.
+let isWindowsTerminal = null;
+let windowsTerminalProbe = null;
+
+async function probeWindowsTerminal($) {
+  if (isWindowsTerminal !== null) return isWindowsTerminal;
+  if (!windowsTerminalProbe) {
+    windowsTerminalProbe = (async () => {
+      try {
+        // $.env.get requires a string literal. Returns `undefined` (not
+        // throw) when the var is unset, so a truthy check is correct.
+        isWindowsTerminal = Boolean(await $.env.get("WT_SESSION"));
+      } catch {
+        isWindowsTerminal = false;
+      }
+      return isWindowsTerminal;
+    })();
+  }
+  return windowsTerminalProbe;
+}
+
 export function register(on, options) {
   const rawBase = typeof options?.baseUrl === "string" ? options.baseUrl.trim() : "";
   const baseUrl = rawBase ? rawBase.replace(/\/+$/, "") : DEFAULT_BASE_URL;
@@ -90,6 +123,9 @@ export function register(on, options) {
     readings = [];
     balance = null;
     lastFetchAt = 0;
+    // Probe the terminal once, eagerly: the AbovePrompt coexistence
+    // handler branches on it and the render path stays sync.
+    await probeWindowsTerminal($);
     await readUsage($);
     // If readUsage had no real numbers to record (common on a fresh
     // session — $.session.usage() returns 0 before the first response),
@@ -220,10 +256,54 @@ export function register(on, options) {
     return result;
   });
 
-  on("ui.render", { component: "AbovePrompt" }, ($, e, next) => {
+  // The band is shared: every mod that draws an AbovePrompt tree
+  // contributes a row, but the engine keeps only the LAST tree returned —
+  // a mod that returns its own tree alone replaces whatever the mods
+  // after it drew. To coexist, a mod must carry the tree the others drew
+  // (what `await next(e)` resolves to) as a child of its own Box.
+  //
+  // This handler used to return our band alone, which cut the chain here:
+  // every mod loaded after this one (cc-conversation-log-mod,
+  // cc-file-history-mod) never ran at all, so their bands vanished and
+  // only the mods above us in the chain showed. Now the bands compose —
+  // the chain no longer depends on the order the mods are loaded in.
+  //
+  // Layout, as in cc-file-history-mod:
+  //   * our band is a row with `flexWrap: "wrap"` (a section that doesn't
+  //     fit moves to the next line). It goes first and direct — the shape
+  //     that renders as it always has.
+  //   * WT: the other mods' tree goes in an inner column Box — a
+  //     row-with-wrap tree as a direct child of a column misbehaves there.
+  //   * everywhere else: direct nesting; a column-shaped child of a
+  //     column fills the vertical room there and pushes the band
+  //     off-screen.
+  on("ui.render", { component: "AbovePrompt" }, async ($, e, next) => {
     if (e.hasSurvey) return next(e);
     const { Box, Text } = $.ui.resolve(e);
-    return band(Box, Text, e.bodyColumns ?? 80);
+    const ourBand = band(Box, Text, e.bodyColumns ?? 80);
+
+    // What the mods after us drew. `next(e)` throws when no other
+    // AbovePrompt handler is registered (we are the only one) — that
+    // means "no other band", not a failure.
+    let others = null;
+    try {
+      others = await next(e);
+    } catch {
+      others = null;
+    }
+    // Element-shaped = a plain object with a string `type`. Anything else
+    // (the engine's empty tree) is not a band to compose with.
+    const looksLikeElement =
+      others !== null &&
+      others !== undefined &&
+      typeof others === "object" &&
+      typeof others.type === "string";
+    if (!looksLikeElement) return ourBand;
+
+    const children = (await probeWindowsTerminal($))
+      ? [ourBand, Box({ flexDirection: "column", children: [others] })]
+      : [ourBand, others];
+    return Box({ flexDirection: "column", children });
   });
 }
 
