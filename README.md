@@ -8,6 +8,9 @@ cc-mods/
 ├── cc-context-mod/                     ← mod: live context weather + MiniMax M Plan balance
 ├── cc-code-format-mod/                 ← mod: rewrites every code block to standard style
 ├── cc-notify-mod/                      ← mod: macOS Notification Center for task completion
+├── cc-file-history-mod/                ← mod: every file Claude edited, with one-click revert
+├── cc-conversation-log-mod/            ← mod: read-only log of the session's messages
+├── cc-timing-mod/                      ← mod: where a turn's wall-clock time went
 └── (future mods drop here)
 ```
 
@@ -20,6 +23,7 @@ cc-mods/
 | [`cc-notify-mod`](./cc-notify-mod)             | Forwards `turn.complete` / repeated `Bash` failures / `AskUserQuestion` prompts to the macOS Notification Center when you are away from the terminal.                    |
 | [`cc-file-history-mod`](./cc-file-history-mod) | Panel listing every file Claude has edited this session, with a one-click **Revert** per edit that restores the file to its pre-edit content. Open with `/file-history`. |
 | [`cc-conversation-log-mod`](./cc-conversation-log-mod) | Read-only panel of every user/assistant message in the current session, with collapsible tool-call groups and paged loading of older turns. Open with `/history`. |
+| [`cc-timing-mod`](./cc-timing-mod) | Answers *why* a turn took so long: splits its wall-clock time into model requests, tool calls, approval waits, other plugins' hooks and engine overhead. Live line above the prompt, breakdown in a pane (`/timing`). |
 
 ## Install
 
@@ -185,6 +189,27 @@ on("ui.render", { component: "AbovePrompt" }, async ($, e, next) => {
 Live with both `cc-context-mod` and `cc-file-history-mod` loaded:
 `cc-context-mod`'s band sits on top, `▶ File history: N edits …` sits
 below it; both visible together after every Edit.
+
+### Every mod in the chain must call `next(e)`
+
+The chain is only as long as the mods that keep it going. A handler
+that returns its own tree **without** `await next(e)` ends the chain
+there: the mods after it never run, so their bands never appear — not
+dimmed, not hidden behind ours, simply never drawn.
+
+`cc-context-mod` used to do exactly that, and the symptom was confusing:
+its band and `cc-timing-mod`'s showed (timing is loaded before it and
+pulls context's tree through `next(e)`), while `cc-conversation-log-mod`
+and `cc-file-history-mod` (loaded after it) showed nothing at all. Its
+handler now composes like the others', so the chain no longer depends on
+the order the mods are loaded in.
+
+Which mod's band lands where depends on the shape each mod draws: most
+of them put the tree they got from `next(e)` first and their own row
+under it, while `cc-context-mod` puts its own row first. With the mods
+loaded in the order of `CLAUDE_CODE_PLUGIN_DIRS` (timing, code-format,
+context, conversation-log, file-history) the stack reads top to bottom:
+context, conversation-log, file-history, timing.
 
 Layout rules that bit earlier builds — keep the band's own row plain
 (no `flexWrap`, no `flexGrow: 1` spacers, no nested Boxes inside the

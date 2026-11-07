@@ -121,7 +121,7 @@ Each "section" is its own Box; the outer Box has `flexWrap: 'wrap'` so a section
 | `session.append { door: 'tool-result' }` (main loop only) | Fires when a `tool_result` lands in the transcript, including subagent returns. Catches intra-turn context jumps that `session.measure` may not push for. The `!e.agentId` filter skips subagent-internal tool_results, which don't move the parent's `$.session.usage()`. |
 | `session.append { door: 'response' }` (main loop only) | Fires after each model response — the new `input_tokens` for that response is the freshest context figure available. |
 | `turn.complete`| Safety net: covers subagent turns (`session.measure` is documented as main-thread only) and any case `session.measure` / `session.compact` / `session.append` / `session.end` missed. |
-| `ui.render` with `{component: "AbovePrompt"}` | Draws the band.                       |
+| `ui.render` with `{component: "AbovePrompt"}` | Draws the band. The band is shared with every other mod that draws one, so the handler composes ours with the tree the other mods drew (`await next(e)`) instead of returning ours alone — a handler that returns its own tree cuts the chain, and every mod loaded after it never draws at all. |
 | `$.clock.every(60000, …)` | Re-fetches the balance so the windows stay current between turns. |
 
 Multiple hooks can report the same value (e.g. `session.measure` and `turn.complete` both firing at turn end). `readUsage` dedupes against the last real reading — same `tokens`+`window` means no movement, so the 12-bar chart doesn't fill with duplicate bars. After `/compact`, the chart shows the drop naturally (a tall bar followed by a short one), and `▲ +X last turn` becomes `▼ -X last turn` for that delta — accurate, not reset.
@@ -136,7 +136,7 @@ Module state (history, latest reading) lives in module-level vars, exactly like 
 
 - The 60s balance timer covers any drift between context events.
 - The chart's bars are relative to the busiest reading shown. M Plan percentages are absolute.
-- One band per session — another plugin that draws `AbovePrompt` competes for the same row.
+- One band per session — the band sits above the prompt together with the other mods' bands (cc-timing-mod, cc-conversation-log-mod, cc-file-history-mod); ours is the first row, theirs below.
 - The M Plan side calls `$.http.fetch`, which `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` may block. With that variable set the band shows an HTTP error.
 - Picks the `general` bucket only. Per-model breakdown (`model_remains[]` has `general` + `video`) is parsed and dropped — open an issue if you want it.
 
